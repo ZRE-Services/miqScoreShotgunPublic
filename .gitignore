@@ -102,3 +102,6 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# Wrapper run folders (run_miqscore.py)
+results/

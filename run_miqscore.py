@@ -30,6 +30,7 @@ DOCKER_IMAGE = "miqscoreshotgun"
 CONTAINER_DATA = "/data"
 DEFAULT_SUBSAMPLE_READS = 1_000_000
 VALID_SAMPLE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\- ]*$")
+RESULTS_DIR = lotstore.REPO_ROOT / "results"
 ENTER_LOT = "_enter_lot"  # value set names must start with a letter or digit, so this cannot clash
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", datefmt="%H:%M:%S")
@@ -226,16 +227,92 @@ def choose_lot(store, preset_lot, preset_value_set=None):
 
 # ---------- input / subsampling ----------
 
-def choose_folder(preset):
-    folder = preset
-    if folder is None:
-        folder = Path(ask(questionary.path("Folder containing your FASTQ files:", only_directories=True))).expanduser()
-    folder = folder.resolve()
+def runnable_samples(pairs):
+    return [name for name, files in pairs.items() if files["R1"] and files["R2"] and VALID_SAMPLE_NAME.match(name)]
+
+
+def folder_problem(folder):
     if not folder.is_dir():
-        logger.error(f"Not a folder: {folder}")
-        sys.exit(1)
-    logger.info(f"Selected folder: {folder}")
-    return folder
+        return "Not a folder"
+    if not find_fastq_pairs(folder):
+        return "No *_R1.fastq.gz / *_R2.fastq.gz files in this folder"
+    return None
+
+
+def candidate_folders(base):
+    folders = [base] + sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith("."))
+    found = []
+    for folder in folders:
+        try:
+            count = len(runnable_samples(find_fastq_pairs(folder)))
+        except OSError:
+            continue
+        if count:
+            found.append((folder, count))
+    return found
+
+
+def type_folder_path():
+    def validate(text):
+        if not text.strip():
+            return True
+        return folder_problem(Path(text.strip()).expanduser()) or True
+
+    text = ask(questionary.path("Folder containing your FASTQ files (empty to go back):", only_directories=True, validate=validate)).strip()
+    return Path(text).expanduser() if text else None
+
+
+def pick_folder():
+    base = Path.cwd()
+    candidates = candidate_folders(base)
+    if not candidates:
+        return type_folder_path()
+    width = max(len(str(folder.relative_to(base))) for folder, _ in candidates)
+    choices = [questionary.Choice(f"{'./' if folder == base else str(folder.relative_to(base)):<{width + 2}} ({count} sample{'s' if count != 1 else ''})",
+                                  value=str(folder)) for folder, count in candidates]
+    choices.append(questionary.Choice("Type a path...", value=""))
+    answer = ask(questionary.select("Folder containing your FASTQ files:", choices=choices))
+    return Path(answer) if answer else type_folder_path()
+
+
+def show_samples(folder, pairs):
+    runnable = runnable_samples(pairs)
+    print(f"\n  Found {len(runnable)} sample{'s' if len(runnable) != 1 else ''} to run in {folder}")
+    width = max(len(name) for name in pairs)
+    per_line = max(1, 100 // (width + 3))
+    for i in range(0, len(runnable), per_line):
+        print("    " + "   ".join(f"{name:<{width}}" for name in runnable[i:i + per_line]).rstrip())
+    missing = [f"{name} (no {'R2' if files['R1'] else 'R1'})" for name, files in pairs.items() if not (files["R1"] and files["R2"])]
+    invalid = [name for name in pairs if not VALID_SAMPLE_NAME.match(name)]
+    if missing:
+        print(f"  Will be skipped, incomplete pair: {', '.join(missing)}")
+    if invalid:
+        print(f"  Will be skipped, name not accepted by MIQScore: {', '.join(invalid)}")
+    print()
+
+
+def choose_folder(preset):
+    """Returns (folder, fastq_pairs)."""
+    if preset is not None:
+        folder = preset.expanduser().resolve()
+        problem = folder_problem(folder)
+        if problem:
+            logger.error(f"{problem}: {folder}")
+            sys.exit(1)
+        pairs = find_fastq_pairs(folder)
+        show_samples(folder, pairs)
+        return folder, pairs
+    while True:
+        folder = pick_folder()
+        if folder is None:
+            continue
+        folder = folder.resolve()
+        pairs = find_fastq_pairs(folder)
+        show_samples(folder, pairs)
+        count = len(runnable_samples(pairs))
+        if count and ask(questionary.confirm(f"Use these {count} sample{'s' if count != 1 else ''}?", default=True)):
+            logger.info(f"Selected folder: {folder}")
+            return folder, pairs
 
 
 def check_seqtk_available():
@@ -355,7 +432,7 @@ def read_score(output_folder, sample_name, not_before):
 
 
 def write_summary(base_folder, results):
-    summary_path = base_folder / "miqscore_summary.csv"
+    summary_path = base_folder / f"{base_folder.name}_summary.csv"
     fields = ["sample", "miq_score", "raw_miq_score", "status", "lot_number", "value_set", "html_report"]
     with open(summary_path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -379,12 +456,7 @@ def main():
     args = parse_arguments()
     store = lotstore.LotStore()
 
-    input_folder = choose_folder(args.folder)
-    fastq_pairs = find_fastq_pairs(input_folder)
-    if not fastq_pairs:
-        logger.error("No *_R1.fastq.gz / *_R2.fastq.gz files found!")
-        sys.exit(1)
-    logger.info(f"Found {len(fastq_pairs)} samples")
+    input_folder, fastq_pairs = choose_folder(args.folder)
 
     lot_number, value_set = choose_lot(store, args.lot, args.value_set)
     num_reads = choose_subsampling(args.subsample)
@@ -394,7 +466,7 @@ def main():
 
     current_date = datetime.now().strftime("%y%m%d")
     values_label = f"lot{lot_number}" if lot_number else f"set{value_set.name}"
-    base_folder = Path.cwd() / f"{current_date}_{input_folder.name}_{reads_label(num_reads)}_{values_label}_miqscore"
+    base_folder = RESULTS_DIR / f"{current_date}_{input_folder.name}_{reads_label(num_reads)}_{values_label}_miqscore"
     logger.info(f"Analysis folder: {base_folder}")
     input_seq = base_folder / "input" / "sequence"
     output_folder = base_folder / "output"

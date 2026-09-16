@@ -44,13 +44,28 @@ sample.
 ## Quick start
 
 ```bash
-cd /where/you/want/the/results
+cd /where/your/fastq/folders/are
 python /path/to/miqScoreShotgunPublic/run_miqscore.py
 ```
 
 The wrapper asks you, one question at a time:
 
-1. **The FASTQ folder.** Type a path; Tab completes it.
+1. **The FASTQ folder.** The wrapper lists the current directory and its subfolders that contain FASTQ
+   pairs, with the number of samples in each. Pick one, or choose **Type a path...** to enter any other
+   folder (Tab completes it; a folder without FASTQ pairs is rejected, and an empty answer goes back to
+   the list). It then shows the samples it will run and any it will skip, and asks you to confirm.
+
+   ```
+   ? Folder containing your FASTQ files:
+    » in5081_FC186_1M   (1 sample)
+      run_2025-09_fc3   (12 samples)
+      Type a path...
+
+     Found 12 samples to run in /home/me/runs/run_2025-09_fc3
+       S01   S02   S03   ...
+     Will be skipped, incomplete pair: S13 (no R2)
+   ? Use these 12 samples? (Y/n)
+   ```
 2. **The expected values:** pick a saved value set, or enter the lot number of the standard (see
    [Choosing the expected values](#choosing-the-expected-values)).
 3. **Whether to subsample**, and how many reads per file (default 1,000,000).
@@ -64,7 +79,7 @@ Sample     MIQ  Status
 even-B      96  ok
 skewedA     81  ok
 =====================================
-13:06:35 - 2/2 samples succeeded. Summary written to .../miqscore_summary.csv
+13:06:35 - 2/2 samples succeeded. Summary written to .../260916_run_2025-09_fc3_1M_lot270011_miqscore_summary.csv
 ```
 
 Press `Ctrl+C` at any question to cancel.
@@ -75,7 +90,7 @@ Any option you give skips the matching question, so runs can be scripted:
 
 | Option | Meaning |
 |---|---|
-| `--folder PATH` | Folder containing the FASTQ files |
+| `--folder PATH` | Folder containing the FASTQ files. The sample list is printed without asking for confirmation; the wrapper stops if the folder has no FASTQ pairs. |
 | `--lot LOT` | Lot number of the standard. If the lot is known, you only confirm its values; if not, you are asked how to set it up. |
 | `--value-set NAME` | Use the saved value set `lots/NAME.json` directly, without a lot number and without confirming. Cannot be combined with `--lot`. |
 | `--subsample N` | Subsample each file to `N` reads; `0` turns subsampling off |
@@ -184,27 +199,31 @@ You can edit the files by hand. The wrapper checks them when you save a new or l
 
 ## Output
 
-Each run creates a folder in the directory you started the wrapper from:
+Each run creates a folder inside `results/` in the repository, wherever you start the wrapper from.
+`results/` is ignored by git, so run output never shows up as changes to commit:
 
 ```
 <YYMMDD>_<fastq folder>_<reads>_lot<LOT>_miqscore/   (or ..._set<NAME>_miqscore/ for a picked value set)
-├── miqscore_summary.csv        one row per sample
-├── run_info.json               date, input folder, lot, the exact values used, subsampling, image
-├── input/sequence/             temporary FASTQ copies (emptied when the batch ends)
+├── <run folder name>_summary.csv   one row per sample
+├── run_info.json                  date, input folder, lot, the exact values used, subsampling, image
+├── input/sequence/                temporary FASTQ copies (emptied when the batch ends)
 ├── working/
-│   └── reference_<set>.json    the reference file the container used
+│   └── reference_<set>.json       the reference file the container used
 └── output/
-    ├── <sample>.html           MIQ report
-    ├── <sample>.json           detailed results
-    ├── <sample>.bam            alignments
-    └── dada2.<timestamp>.log   container log (one per sample)
+    ├── <sample>.html              MIQ report
+    ├── <sample>.json              detailed results
+    ├── <sample>.bam               alignments
+    └── dada2.<timestamp>.log      container log (one per sample)
 ```
 
 `<reads>` is the subsample size (e.g. `1M`, `500K`) or `fullReads`. Running the same folder with the same
 lot (or value set) and read count on the same day reuses the run folder and overwrites earlier reports. The summary only
 includes reports written by the current run.
 
-### `miqscore_summary.csv`
+### Summary CSV (`<run folder name>_summary.csv`)
+
+The file carries the run folder's name (date, FASTQ folder, reads, lot or value set), so it can be
+copied elsewhere without losing that information.
 
 | Column | Content |
 |---|---|
