@@ -14,6 +14,7 @@ import getpass
 import gzip
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -23,6 +24,13 @@ from datetime import datetime
 from pathlib import Path
 
 import questionary
+from prompt_toolkit import PromptSession
+from prompt_toolkit.application import run_in_terminal
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.lexers import SimpleLexer
+from prompt_toolkit.validation import ValidationError, Validator
+from questionary.constants import DEFAULT_QUESTION_PREFIX
+from questionary.styles import merge_styles_default
 
 import lotstore
 
@@ -252,13 +260,71 @@ def candidate_folders(base):
     return found
 
 
-def type_folder_path():
-    def validate(text):
-        if not text.strip():
-            return True
-        return folder_problem(Path(text.strip()).expanduser()) or True
+def matching_dirs(text):
+    """Directory names completing the last segment of text, like bash (hidden ones only if asked for)."""
+    head, tail = os.path.split(os.path.expanduser(text))
+    try:
+        entries = list(os.scandir(head or "."))
+    except OSError:
+        return tail, []
+    names = [e.name for e in entries
+             if e.name.startswith(tail) and (tail.startswith(".") or not e.name.startswith(".")) and e.is_dir()]
+    return tail, sorted(names)
 
-    text = ask(questionary.path("Folder containing your FASTQ files (empty to go back):", only_directories=True, validate=validate)).strip()
+
+def columns(names):
+    width = max(len(n) for n in names) + 2
+    per_line = max(1, shutil.get_terminal_size().columns // width)
+    return "\n".join("".join(f"{n:<{width}}" for n in names[i:i + per_line]).rstrip()
+                     for i in range(0, len(names), per_line))
+
+
+class _PathValidator(Validator):
+    def __init__(self, check):
+        self.check = check
+
+    def validate(self, document):
+        problem = self.check(document.text)
+        if problem:
+            raise ValidationError(message=problem, cursor_position=len(document.text))
+
+
+def path_prompt(message, validate):
+    """A path prompt with bash-style Tab: complete to the common prefix, list the choices on a second Tab."""
+    bindings = KeyBindings()
+
+    @bindings.add("tab")
+    def complete(event):
+        buffer = event.current_buffer
+        tail, names = matching_dirs(buffer.document.text_before_cursor)
+        if len(names) == 1:
+            buffer.insert_text(names[0][len(tail):] + os.sep)
+            return
+        common = os.path.commonprefix(names)
+        if len(common) > len(tail):
+            buffer.insert_text(common[len(tail):])
+        elif names and event.is_repeat:
+            listing = columns([n + os.sep for n in names])
+            run_in_terminal(lambda: print(listing))
+        else:
+            event.app.output.bell()
+
+    session = PromptSession(
+        [("class:qmark", DEFAULT_QUESTION_PREFIX), ("class:question", f" {message} ")],
+        lexer=SimpleLexer("class:answer"),
+        style=merge_styles_default([None]),
+        validator=_PathValidator(validate),
+        validate_while_typing=False,
+        key_bindings=bindings,
+    )
+    return questionary.Question(session.app)
+
+
+def type_folder_path():
+    def problem(text):
+        return folder_problem(Path(text.strip()).expanduser()) if text.strip() else None
+
+    text = ask(path_prompt("Folder containing your FASTQ files (Tab completes, empty to go back):", problem)).strip()
     return Path(text).expanduser() if text else None
 
 

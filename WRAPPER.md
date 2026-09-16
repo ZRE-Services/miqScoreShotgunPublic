@@ -52,8 +52,9 @@ The wrapper asks you, one question at a time:
 
 1. **The FASTQ folder.** The wrapper lists the current directory and its subfolders that contain FASTQ
    pairs, with the number of samples in each. Pick one, or choose **Type a path...** to enter any other
-   folder (Tab completes it; a folder without FASTQ pairs is rejected, and an empty answer goes back to
-   the list). It then shows the samples it will run and any it will skip, and asks you to confirm.
+   folder. Tab works as in a Linux shell: it completes as far as the folder name is unambiguous, and a
+   second Tab lists the matching folders. When you press Enter, a folder without FASTQ pairs is rejected,
+   and an empty answer goes back to the list. It then shows the samples it will run and any it will skip, and asks you to confirm.
 
    ```
    ? Folder containing your FASTQ files:
