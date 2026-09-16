@@ -50,26 +50,58 @@ python /path/to/miqScoreShotgunPublic/run_miqscore.py
 
 The wrapper asks you, one question at a time:
 
-1. **The FASTQ folder.** The wrapper lists the current directory and its subfolders that contain FASTQ
-   pairs, with the number of samples in each. Pick one, or choose **Type a path...** to enter any other
-   folder. Tab works as in a Linux shell: it completes as far as the folder name is unambiguous, and a
-   second Tab lists the matching folders. When you press Enter, a folder without FASTQ pairs is rejected,
-   and an empty answer goes back to the list. It then shows the samples it will run and any it will skip, and asks you to confirm.
+1. **The FASTQ folder.** The wrapper lists the folders that contain FASTQ pairs, with the number of
+   samples in each: the current directory and its subfolders, then the folders you used recently. Pick
+   one, or choose **Type a path...** to enter any other folder.
+
+   In the path prompt, **Up/Down** bring back your recent folders so you can edit one (for example a
+   sibling of a folder you used before) instead of typing the whole path. **Tab** works as in a Linux
+   shell: it completes as far as the folder name is unambiguous, and a second Tab lists the matching
+   folders. When you press Enter, a folder without FASTQ pairs is rejected, and an empty answer goes back
+   to the list.
+
+   The wrapper then shows the samples it will run and any it will skip, and asks you to confirm.
 
    ```
    ? Folder containing your FASTQ files:
-    » in5081_FC186_1M   (1 sample)
-      run_2025-09_fc3   (12 samples)
+     -- In this directory --
+    » in5081_FC186_1M                     (1 sample)
+     -- Recent --
+      ~/runs/2025-09/run_2025-09_fc3      (12 samples)
+      /mnt/seq/2025-08/run_2025-08_fc1    (8 samples)
+
       Type a path...
 
-     Found 12 samples to run in /home/me/runs/run_2025-09_fc3
+     Found 12 samples to run in /home/me/runs/2025-09/run_2025-09_fc3
        S01   S02   S03   ...
      Will be skipped, incomplete pair: S13 (no R2)
    ? Use these 12 samples? (Y/n)
    ```
+
+   The last 10 confirmed folders are kept in `~/.config/miqscore/recent_input_folders.json` (under
+   `$XDG_CONFIG_HOME` if set), one list per user and not in the repository. Folders that no longer exist
+   or no longer contain FASTQ pairs are not shown. Delete the file to clear the list.
 2. **The expected values:** pick a saved value set, or enter the lot number of the standard (see
    [Choosing the expected values](#choosing-the-expected-values)).
 3. **Whether to subsample**, and how many reads per file (default 1,000,000).
+4. **Where the results go.** `results/` in the repository is offered first; press Enter to use it. Below
+   it are the output folders you used recently, and **Type a path...** for any other folder. The typed
+   path works like the FASTQ one (Tab, Up/Down for recent output folders, empty goes back). The folder
+   is created if it doesn't exist; a path you can't write to, or one containing `:` (Docker can't mount
+   it), is rejected.
+
+   ```
+   ? Where should the results go?
+    » results/ in this repository (~/miqScoreShotgunPublic/results)
+     -- Recent --
+      /mnt/shared/miqscore
+      ~/projects/fc3/miq
+
+      Type a path...
+   ```
+
+   Custom output folders are remembered in `~/.config/miqscore/recent_output_folders.json`; the default
+   `results/` is not added to that list, since it is always offered first.
 
 It then processes every sample, prints the Docker output as it goes, and ends with a summary table:
 
@@ -95,6 +127,7 @@ Any option you give skips the matching question, so runs can be scripted:
 | `--lot LOT` | Lot number of the standard. If the lot is known, you only confirm its values; if not, you are asked how to set it up. |
 | `--value-set NAME` | Use the saved value set `lots/NAME.json` directly, without a lot number and without confirming. Cannot be combined with `--lot`. |
 | `--subsample N` | Subsample each file to `N` reads; `0` turns subsampling off |
+| `--output PATH` | Folder to create the run folder in (default: `results/` in the repository). Created if missing. |
 | `--image NAME` | Docker image to run (default `miqscoreshotgun`) |
 
 ```bash
@@ -200,8 +233,9 @@ You can edit the files by hand. The wrapper checks them when you save a new or l
 
 ## Output
 
-Each run creates a folder inside `results/` in the repository, wherever you start the wrapper from.
-`results/` is ignored by git, so run output never shows up as changes to commit:
+Each run creates a folder inside the output folder you chose, by default `results/` in the repository
+(wherever you start the wrapper from). `results/` is ignored by git, so run output never shows up as
+changes to commit:
 
 ```
 <YYMMDD>_<fastq folder>_<reads>_lot<LOT>_miqscore/   (or ..._set<NAME>_miqscore/ for a picked value set)

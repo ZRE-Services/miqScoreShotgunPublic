@@ -5,7 +5,8 @@ Run MIQScore on a folder of paired FASTQ files with lot-specific expected values
 1. Choose the folder containing *_R1.fastq.gz / *_R2.fastq.gz pairs
 2. Pick a saved value set, or enter the standard's lot number (link it to a value set or enter new values)
 3. Optionally subsample with seqtk
-4. Run the miqscoreshotgun docker image for every sample and write a summary CSV
+4. Choose where the run folder goes (results/ in the repository by default)
+5. Run the miqscoreshotgun docker image for every sample and write a summary CSV
 """
 
 import argparse
@@ -26,6 +27,7 @@ from pathlib import Path
 import questionary
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import run_in_terminal
+from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.lexers import SimpleLexer
 from prompt_toolkit.validation import ValidationError, Validator
@@ -39,6 +41,8 @@ CONTAINER_DATA = "/data"
 DEFAULT_SUBSAMPLE_READS = 1_000_000
 VALID_SAMPLE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\- ]*$")
 RESULTS_DIR = lotstore.REPO_ROOT / "results"
+RECENTS_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "miqscore"
+MAX_RECENTS = 10
 ENTER_LOT = "_enter_lot"  # value set names must start with a letter or digit, so this cannot clash
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", datefmt="%H:%M:%S")
@@ -52,6 +56,7 @@ def parse_arguments():
     choice.add_argument("--lot", help="Lot number of the microbial community standard")
     choice.add_argument("--value-set", help="Name of a saved value set in lots/ to use without a lot number")
     parser.add_argument("--subsample", type=int, help="Reads to subsample per file (0 disables subsampling)")
+    parser.add_argument("--output", type=Path, help=f"Folder to create the run folder in (default: {RESULTS_DIR})")
     parser.add_argument("--image", default=DOCKER_IMAGE, help=f"Docker image to run (default: {DOCKER_IMAGE})")
     return parser.parse_args()
 
@@ -247,8 +252,7 @@ def folder_problem(folder):
     return None
 
 
-def candidate_folders(base):
-    folders = [base] + sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith("."))
+def with_sample_counts(folders):
     found = []
     for folder in folders:
         try:
@@ -258,6 +262,10 @@ def candidate_folders(base):
         if count:
             found.append((folder, count))
     return found
+
+
+def candidate_folders(base):
+    return with_sample_counts([base] + sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")))
 
 
 def matching_dirs(text):
@@ -289,7 +297,7 @@ class _PathValidator(Validator):
             raise ValidationError(message=problem, cursor_position=len(document.text))
 
 
-def path_prompt(message, validate):
+def path_prompt(message, validate, history=()):
     """A path prompt with bash-style Tab: complete to the common prefix, list the choices on a second Tab."""
     bindings = KeyBindings()
 
@@ -316,29 +324,75 @@ def path_prompt(message, validate):
         validator=_PathValidator(validate),
         validate_while_typing=False,
         key_bindings=bindings,
+        history=InMemoryHistory(list(reversed(history))),
     )
     return questionary.Question(session.app)
 
 
-def type_folder_path():
-    def problem(text):
-        return folder_problem(Path(text.strip()).expanduser()) if text.strip() else None
+def recents_file(kind):
+    return RECENTS_DIR / f"recent_{kind}_folders.json"
 
-    text = ask(path_prompt("Folder containing your FASTQ files (Tab completes, empty to go back):", problem)).strip()
+
+def load_recent_folders(kind):
+    try:
+        with open(recents_file(kind)) as handle:
+            entries = json.load(handle)
+    except (OSError, ValueError):
+        return []
+    return [Path(entry) for entry in entries if isinstance(entry, str) and Path(entry).is_dir()] if isinstance(entries, list) else []
+
+
+def remember_folder(kind, folder):
+    recents = [folder] + [p for p in load_recent_folders(kind) if p != folder]
+    try:
+        RECENTS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(recents_file(kind), "w") as handle:
+            json.dump([str(p) for p in recents[:MAX_RECENTS]], handle, indent=2)
+    except OSError as err:
+        logger.warning(f"Could not save the recent folders list: {err}")
+
+
+def display_path(folder):
+    try:
+        return f"~{os.sep}{folder.relative_to(Path.home())}"
+    except ValueError:
+        return str(folder)
+
+
+def type_path(message, check, kind):
+    """Returns the typed folder, or None when the answer is empty (go back)."""
+    def problem(text):
+        return check(Path(text.strip()).expanduser()) if text.strip() else None
+
+    recents = [display_path(p) for p in load_recent_folders(kind)]
+    hint = "Tab completes, Up/Down recalls recent folders, empty goes back" if recents else "Tab completes, empty goes back"
+    text = ask(path_prompt(f"{message} ({hint}):", problem, recents)).strip()
     return Path(text).expanduser() if text else None
+
+
+def folder_choices(title, entries):
+    if not entries:
+        return []
+    width = max(len(label) for label, _, _ in entries)
+    return [questionary.Separator(title)] + [
+        questionary.Choice(f"{label:<{width + 2}} ({count} sample{'s' if count != 1 else ''})", value=str(folder))
+        for label, folder, count in entries]
 
 
 def pick_folder():
     base = Path.cwd()
-    candidates = candidate_folders(base)
-    if not candidates:
-        return type_folder_path()
-    width = max(len(str(folder.relative_to(base))) for folder, _ in candidates)
-    choices = [questionary.Choice(f"{'./' if folder == base else str(folder.relative_to(base)):<{width + 2}} ({count} sample{'s' if count != 1 else ''})",
-                                  value=str(folder)) for folder, count in candidates]
+    nearby = candidate_folders(base)
+    nearby_paths = {folder for folder, _ in nearby}
+    recent = with_sample_counts([p for p in load_recent_folders("input") if p not in nearby_paths])
+    if not nearby and not recent:
+        return type_path("Folder containing your FASTQ files", folder_problem, "input")
+    choices = folder_choices("-- In this directory --",
+                             [("./" if f == base else str(f.relative_to(base)), f, n) for f, n in nearby])
+    choices += folder_choices("-- Recent --", [(display_path(f), f, n) for f, n in recent])
+    choices.append(questionary.Separator(" "))
     choices.append(questionary.Choice("Type a path...", value=""))
     answer = ask(questionary.select("Folder containing your FASTQ files:", choices=choices))
-    return Path(answer) if answer else type_folder_path()
+    return Path(answer) if answer else type_path("Folder containing your FASTQ files", folder_problem, "input")
 
 
 def show_samples(folder, pairs):
@@ -367,6 +421,7 @@ def choose_folder(preset):
             sys.exit(1)
         pairs = find_fastq_pairs(folder)
         show_samples(folder, pairs)
+        remember_folder("input", folder)
         return folder, pairs
     while True:
         folder = pick_folder()
@@ -378,7 +433,44 @@ def choose_folder(preset):
         count = len(runnable_samples(pairs))
         if count and ask(questionary.confirm(f"Use these {count} sample{'s' if count != 1 else ''}?", default=True)):
             logger.info(f"Selected folder: {folder}")
+            remember_folder("input", folder)
             return folder, pairs
+
+
+def output_problem(folder):
+    if ":" in str(folder):
+        return "Docker cannot mount a path that contains ':'"
+    if folder.exists() and not folder.is_dir():
+        return "Not a folder"
+    existing = next(p for p in [folder, *folder.parents] if p.exists())
+    if not existing.is_dir() or not os.access(existing, os.W_OK | os.X_OK):
+        return f"No permission to write in {existing}"
+    return None
+
+
+def choose_output(preset):
+    """Returns the folder the run folder is created in."""
+    if preset is not None:
+        folder = preset.expanduser().resolve()
+        problem = output_problem(folder)
+        if problem:
+            logger.error(f"{problem}: {folder}")
+            sys.exit(1)
+    else:
+        folder = None
+        while folder is None:
+            recent = [p for p in load_recent_folders("output") if p != RESULTS_DIR]
+            choices = [questionary.Choice(f"results/ in this repository ({display_path(RESULTS_DIR)})", value=str(RESULTS_DIR))]
+            if recent:
+                choices.append(questionary.Separator("-- Recent --"))
+                choices += [questionary.Choice(display_path(p), value=str(p)) for p in recent]
+            choices += [questionary.Separator(" "), questionary.Choice("Type a path...", value="")]
+            answer = ask(questionary.select("Where should the results go?", choices=choices))
+            folder = Path(answer) if answer else type_path("Folder for the results", output_problem, "output")
+        folder = folder.resolve()
+    if folder != RESULTS_DIR:
+        remember_folder("output", folder)
+    return folder
 
 
 def check_seqtk_available():
@@ -526,13 +618,14 @@ def main():
 
     lot_number, value_set = choose_lot(store, args.lot, args.value_set)
     num_reads = choose_subsampling(args.subsample)
+    output_root = choose_output(args.output)
 
     sudo_password = get_sudo_password()
     check_docker_image_available(args.image, sudo_password)
 
     current_date = datetime.now().strftime("%y%m%d")
     values_label = f"lot{lot_number}" if lot_number else f"set{value_set.name}"
-    base_folder = RESULTS_DIR / f"{current_date}_{input_folder.name}_{reads_label(num_reads)}_{values_label}_miqscore"
+    base_folder = output_root / f"{current_date}_{input_folder.name}_{reads_label(num_reads)}_{values_label}_miqscore"
     logger.info(f"Analysis folder: {base_folder}")
     input_seq = base_folder / "input" / "sequence"
     output_folder = base_folder / "output"
