@@ -3,7 +3,7 @@
 Run MIQScore on a folder of paired FASTQ files with lot-specific expected values.
 
 1. Choose the folder containing *_R1.fastq.gz / *_R2.fastq.gz pairs
-2. Choose the standard's lot number (link it to a saved value set or enter new values)
+2. Pick a saved value set, or enter the standard's lot number (link it to a value set or enter new values)
 3. Optionally subsample with seqtk
 4. Run the miqscoreshotgun docker image for every sample and write a summary CSV
 """
@@ -30,6 +30,7 @@ DOCKER_IMAGE = "miqscoreshotgun"
 CONTAINER_DATA = "/data"
 DEFAULT_SUBSAMPLE_READS = 1_000_000
 VALID_SAMPLE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\- ]*$")
+ENTER_LOT = "_enter_lot"  # value set names must start with a letter or digit, so this cannot clash
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
@@ -38,7 +39,9 @@ logger = logging.getLogger(__name__)
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Run MIQScore with lot-specific expected values")
     parser.add_argument("--folder", type=Path, help="Folder containing *_R1.fastq.gz / *_R2.fastq.gz pairs")
-    parser.add_argument("--lot", help="Lot number of the microbial community standard")
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument("--lot", help="Lot number of the microbial community standard")
+    choice.add_argument("--value-set", help="Name of a saved value set in lots/ to use without a lot number")
     parser.add_argument("--subsample", type=int, help="Reads to subsample per file (0 disables subsampling)")
     parser.add_argument("--image", default=DOCKER_IMAGE, help=f"Docker image to run (default: {DOCKER_IMAGE})")
     return parser.parse_args()
@@ -179,11 +182,36 @@ def resolve_lot(store, lot_number):
             return store.link_lot(candidate, lot_number)
 
 
-def choose_lot(store, preset_lot):
+def choose_value_set_or_lot(store):
+    """Returns (None, value_set) for a directly picked value set, or (lot_number, None) to look up a lot."""
+    choices = [questionary.Choice(values_summary(s), value=s.name) for s in store.value_sets()]
+    choices.append(questionary.Choice("Enter a lot number", value=ENTER_LOT))
+    name = ask(questionary.select("Expected values to use:", choices=choices))
+    if name == ENTER_LOT:
+        return ask(questionary.text("Lot number of the standard:", validate=lambda t: bool(t.strip()) or "Enter a lot number")).strip(), None
+    value_set = store.get(name)
+    show(value_set)
+    return None, value_set if ask(questionary.confirm(f"Use value set '{name}'?", default=True)) else None
+
+
+def choose_lot(store, preset_lot, preset_value_set=None):
+    """Returns (lot_number, value_set); lot_number is None when a value set was picked without a lot."""
+    if preset_value_set is not None:
+        value_set = store.get(preset_value_set)
+        if value_set is None:
+            logger.error(f"Unknown value set '{preset_value_set}'. Known: {', '.join(s.name for s in store.value_sets())}")
+            sys.exit(1)
+        logger.info(f"Using value set '{value_set.name}'")
+        return None, value_set
     lot_number = preset_lot
     while True:
         if lot_number is None:
-            lot_number = ask(questionary.text("Lot number of the standard:", validate=lambda t: bool(t.strip()) or "Enter a lot number")).strip()
+            lot_number, value_set = choose_value_set_or_lot(store)
+            if value_set:
+                logger.info(f"Using value set '{value_set.name}'")
+                return None, value_set
+            if lot_number is None:
+                continue
         try:
             lot_number = lotstore.check_name(lot_number, "lot number")
             value_set = resolve_lot(store, lot_number)
@@ -358,14 +386,15 @@ def main():
         sys.exit(1)
     logger.info(f"Found {len(fastq_pairs)} samples")
 
-    lot_number, value_set = choose_lot(store, args.lot)
+    lot_number, value_set = choose_lot(store, args.lot, args.value_set)
     num_reads = choose_subsampling(args.subsample)
 
     sudo_password = get_sudo_password()
     check_docker_image_available(args.image, sudo_password)
 
     current_date = datetime.now().strftime("%y%m%d")
-    base_folder = Path.cwd() / f"{current_date}_{input_folder.name}_{reads_label(num_reads)}_lot{lot_number}_miqscore"
+    values_label = f"lot{lot_number}" if lot_number else f"set{value_set.name}"
+    base_folder = Path.cwd() / f"{current_date}_{input_folder.name}_{reads_label(num_reads)}_{values_label}_miqscore"
     logger.info(f"Analysis folder: {base_folder}")
     input_seq = base_folder / "input" / "sequence"
     output_folder = base_folder / "output"
@@ -387,7 +416,7 @@ def main():
     for sample_name, files in fastq_pairs.items():
         logger.info(f"Processing sample: {sample_name}")
         result = {"sample": sample_name, "miq_score": "", "raw_miq_score": "", "status": "",
-                  "lot_number": lot_number, "value_set": value_set.name, "html_report": ""}
+                  "lot_number": lot_number or "", "value_set": value_set.name, "html_report": ""}
         results.append(result)
 
         if not files["R1"] or not files["R2"]:

@@ -12,9 +12,24 @@ separate image for a lot.
 - Python 3.8 or newer
 - Docker, with the image built from this repository:
   ```bash
-  git clone --recursive https://github.com/Zymo-Research/miqScoreShotgunPublic.git
+  git clone https://github.com/ZRE-Services/miqScoreShotgunPublic.git
   cd miqScoreShotgunPublic
+  git config submodule.miqScoreNGSReadCountPublic.url https://github.com/Zymo-Research/miqScoreNGSReadCountPublic.git
+  git submodule update --init --recursive
   docker build -t miqscoreshotgun .
+  ```
+  The `git config` line is required before the first `submodule update`: `miqScoreNGSReadCountPublic` is
+  registered over SSH, which fails with `Host key verification failed` unless you have a GitHub SSH key
+  configured. That line is a local-only override (it does not touch the committed `.gitmodules`) that
+  points it at HTTPS instead, since both submodules are public.
+
+  Do the override first, not as a retry after a failure — if `submodule update --init --recursive` is run
+  once without it, the failed clone can leave the *other* submodule (`miqScoreShotgunPublicSupport`) stuck
+  empty too, even though the log shows it cloning, and simply rerunning the command afterwards will not
+  fix it. If you already hit this, force it to re-clone:
+  ```bash
+  git submodule deinit -f miqScoreShotgunPublicSupport
+  git submodule update --init miqScoreShotgunPublicSupport
   ```
 - The wrapper's Python packages:
   ```bash
@@ -36,7 +51,8 @@ python /path/to/miqScoreShotgunPublic/run_miqscore.py
 The wrapper asks you, one question at a time:
 
 1. **The FASTQ folder.** Type a path; Tab completes it.
-2. **The lot number** of the standard (see [Choosing a lot](#choosing-a-lot)).
+2. **The expected values:** pick a saved value set, or enter the lot number of the standard (see
+   [Choosing the expected values](#choosing-the-expected-values)).
 3. **Whether to subsample**, and how many reads per file (default 1,000,000).
 
 It then processes every sample, prints the Docker output as it goes, and ends with a summary table:
@@ -61,11 +77,13 @@ Any option you give skips the matching question, so runs can be scripted:
 |---|---|
 | `--folder PATH` | Folder containing the FASTQ files |
 | `--lot LOT` | Lot number of the standard. If the lot is known, you only confirm its values; if not, you are asked how to set it up. |
+| `--value-set NAME` | Use the saved value set `lots/NAME.json` directly, without a lot number and without confirming. Cannot be combined with `--lot`. |
 | `--subsample N` | Subsample each file to `N` reads; `0` turns subsampling off |
 | `--image NAME` | Docker image to run (default `miqscoreshotgun`) |
 
 ```bash
 python run_miqscore.py --folder ~/runs/2025-09-flowcell3 --lot 270011 --subsample 1000000
+python run_miqscore.py --folder ~/runs/2025-09-flowcell3 --value-set default --subsample 0
 ```
 
 ## Input files
@@ -81,9 +99,20 @@ Both types of skipped sample are listed in the summary.
 
 Only paired-end Illumina data with the standard (non-HMW) product is supported.
 
-## Choosing a lot
+## Choosing the expected values
 
-When you enter a lot number, the wrapper looks it up in `lots/`.
+The wrapper first lists the saved value sets (one line each), followed by **Enter a lot number**:
+
+```
+? Expected values to use:
+ » default                  P.aer 12 | E.col 12 | S.ent 12 | ...
+   Enter a lot number
+```
+
+**Pick a value set** to use it as it is, without typing a lot number. You see its full table and confirm
+it. The run is labelled with the value set's name, and the `lot_number` column of the summary stays empty.
+
+**Enter a lot number** to use the values that belong to your lot. The wrapper looks the lot up in `lots/`.
 
 **Known lot:** the wrapper shows its values, and you confirm them.
 
@@ -111,7 +140,7 @@ When you enter a lot number, the wrapper looks it up in `lots/`.
 - **Enter new expected values.** Give the value set a name (the lot number by default), then enter the
   **Genomic** percentage for each of the 10 organisms from the lot's certificate. The standard's default
   values are pre-filled. You see a preview before anything is saved.
-- **Enter a different lot number.** Go back, for example after a typo.
+- **Enter a different lot number.** Go back to the list, for example after a typo.
 
 ### Rules for expected values
 
@@ -158,7 +187,7 @@ You can edit the files by hand. The wrapper checks them when you save a new or l
 Each run creates a folder in the directory you started the wrapper from:
 
 ```
-<YYMMDD>_<fastq folder>_<reads>_lot<LOT>_miqscore/
+<YYMMDD>_<fastq folder>_<reads>_lot<LOT>_miqscore/   (or ..._set<NAME>_miqscore/ for a picked value set)
 ├── miqscore_summary.csv        one row per sample
 ├── run_info.json               date, input folder, lot, the exact values used, subsampling, image
 ├── input/sequence/             temporary FASTQ copies (emptied when the batch ends)
@@ -172,7 +201,7 @@ Each run creates a folder in the directory you started the wrapper from:
 ```
 
 `<reads>` is the subsample size (e.g. `1M`, `500K`) or `fullReads`. Running the same folder with the same
-lot and read count on the same day reuses the run folder and overwrites earlier reports. The summary only
+lot (or value set) and read count on the same day reuses the run folder and overwrites earlier reports. The summary only
 includes reports written by the current run.
 
 ### `miqscore_summary.csv`
@@ -183,8 +212,8 @@ includes reports written by the current run.
 | `miq_score` | MIQ score rounded as in the HTML report |
 | `raw_miq_score` | MIQ score to two decimals |
 | `status` | `ok`, `skipped: missing R1/R2`, `skipped: invalid sample name`, `failed: fastq preparation`, `failed: docker` or `failed: no report` |
-| `lot_number` | Lot entered for the run |
-| `value_set` | Value set the lot resolved to |
+| `lot_number` | Lot entered for the run (empty if a value set was picked directly) |
+| `value_set` | Value set used for the run |
 | `html_report` | Path to the HTML report |
 
 ## How it works
