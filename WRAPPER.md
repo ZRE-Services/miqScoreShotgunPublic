@@ -186,17 +186,48 @@ it. The run is labelled with the value set's name, and the `lot_number` column o
 - **Link to an existing value set.** Use this when the new lot has the same values as a lot you already
   have. Browse the saved value sets (one line each), look at the full table, and confirm. The lot number
   is added to that value set, so you don't have to type the values again.
-- **Enter new expected values.** Give the value set a name (the lot number by default), then enter the
-  **Genomic** percentage for each of the 10 organisms from the lot's certificate. The standard's default
-  values are pre-filled. You see a preview before anything is saved.
+- **Enter new expected values.** A table opens where you enter the **Genomic** percentage for each of
+  the 10 organisms from the lot's certificate (see [Entering new values](#entering-new-values)).
 - **Enter a different lot number.** Go back to the list, for example after a typo.
+
+### Entering new values
+
+The table shows the new values next to the standard's defaults and the three most recently changed
+value sets (by last commit in `lots/`; files that were never committed count as newest), so you can
+compare them while you type:
+
+```
+  New expected values (Genomic, %) for lot 270001
+
+                            New                default       261689
+  Value set name                  270001       default       261689
+  Lot number                      270001             -       261689
+
+  P. aeruginosa                     10.9            12        10.47
+  E. coli                                           12        12.69  <- missing
+  S. enterica                         12            12        11.72
+  ...
+```
+
+- The **New** column starts with the default values; values you change are highlighted. The value set
+  name is the lot number unless you change it.
+- Move with the arrow keys (Tab/Shift-Tab also move down/up). You can go back to any cell at any time.
+- In the New column, start typing to overwrite a cell, or press **Enter** to edit the current value.
+  **Enter** confirms and moves down, **Esc** drops the edit, **Del** clears the cell.
+- On another column, **Enter** copies that cell into New, and **Shift-C** copies the whole column. This
+  helps when a new lot differs from a saved one in only a few values.
+- **Ctrl-S** checks everything. Problems are shown next to the row and the cursor jumps to the first
+  one. If only the total is off, **Ctrl-R** rescales the values to 100. **Esc** (or Ctrl-C) leaves the
+  table without saving.
+- After the check you see the full table and choose **Save**, **Edit the values again** (back to the
+  table with your values) or **Cancel**.
 
 ### Rules for expected values
 
 - Every value must be greater than 0. A value of 0 would silently remove that organism from the score.
 - The values must add up to **100**. MIQ Score compares them with the observed percentages as entered,
   without rescaling them. If your numbers don't add up (for example because of rounding on the
-  certificate), you can rescale them to 100 or enter them again.
+  certificate), press Ctrl-R in the table to rescale them to 100, or correct them.
 - You only enter the Genomic values. The bacteria-only values, used by the image's `BACTERIAONLY` option,
   are calculated by leaving out the two yeasts and rescaling the eight bacteria to 100.
 

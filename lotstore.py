@@ -4,6 +4,7 @@ import copy
 import json
 import math
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -173,6 +174,26 @@ class LotStore:
                 problems.append((path.name, BACTERIA_ONLY_MISMATCH))
             sets.append(value_set)
         return sets, problems
+
+    def newest_first(self, sets: list) -> list:
+        """Sorts by last commit time; files that were never committed count as new. File times alone say nothing after a clone."""
+        try:
+            log = subprocess.run(["git", "log", "--format=@%ct", "--name-only", "--", "."], cwd=self.lots_dir,
+                                 capture_output=True, text=True, check=True).stdout
+        except (OSError, subprocess.CalledProcessError):
+            log = ""
+        committed, stamp = {}, 0
+        for line in log.splitlines():
+            if line.startswith("@"):
+                stamp = int(line[1:])
+            elif line:
+                committed.setdefault(Path(line).name, stamp)
+
+        def changed(value_set):
+            path = self.path_for(value_set.name)
+            return committed.get(path.name) or path.stat().st_mtime
+
+        return sorted(sets, key=changed, reverse=True)
 
     @staticmethod
     def duplicate_lots(sets: list) -> dict:

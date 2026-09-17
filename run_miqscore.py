@@ -15,7 +15,6 @@ import getpass
 import gzip
 import json
 import logging
-import math
 import os
 import re
 import shutil
@@ -36,6 +35,7 @@ from prompt_toolkit.validation import ValidationError, Validator
 from questionary.constants import DEFAULT_QUESTION_PREFIX
 from questionary.styles import merge_styles_default
 
+import lot_editor
 import lotstore
 
 DOCKER_IMAGE = "miqscoreshotgun"
@@ -112,66 +112,27 @@ def pick_value_set(store, message):
     return store.get(name) if name else None
 
 
-def enter_genomic_values(product, defaults):
-    names = lotstore.print_names(product)
-
-    def is_positive_number(text):
-        try:
-            value = float(text)
-        except ValueError:
-            return "Enter a number"
-        if not math.isfinite(value):
-            return "Enter a number"
-        return value > 0 or "Must be greater than 0"
-
-    while True:
-        print("\n  Enter the Genomic expected values (%) from the lot's certificate.")
-        values = {}
-        for key in lotstore.organisms(product):
-            answer = ask(questionary.text(f"{names.get(key, key)}:", default=f"{defaults.get(key, ''):g}" if key in defaults else "", validate=is_positive_number))
-            values[key] = float(answer)
-        total = lotstore.genomic_sum(values)
-        if abs(total - 100) <= lotstore.SUM_TOLERANCE:
-            return values
-        action = ask(questionary.select(
-            f"The values add up to {total:g}, but must add up to 100. What now?",
-            choices=[
-                questionary.Choice("Rescale proportionally to 100", value="rescale"),
-                questionary.Choice("Re-enter the values", value="retry"),
-                questionary.Choice("Cancel", value="cancel"),
-            ],
-        ))
-        if action == "rescale":
-            return lotstore.rescale_to_100(values, exact=True)
-        if action == "retry":
-            defaults = values
-        else:
-            return None
-
-
 def create_value_set(store, lot_number):
-    def name_ok(text):
-        try:
-            name = lotstore.check_name(text, "value set name")
-        except lotstore.LotError as err:
-            return str(err)
-        return f"'{name}' already exists" if store.path_for(name).exists() else True
-
-    name = ask(questionary.text("Name for the new value set:", default=lot_number, validate=name_ok)).strip()
     product = "standard"
-    defaults = lotstore.load_base_reference(product)["expectedValues"]["Genomic"]
-    values = enter_genomic_values(product, defaults)
-    if values is None:
-        return None
-    preview = lotstore.ValueSet(name=name, genomic=values, lot_numbers=[lot_number], product=product)
-    show(preview)
-    if not ask(questionary.confirm(f"Save value set '{name}' for lot {lot_number}?", default=True)):
-        return None
-    try:
-        return store.create(name, lot_number, values, product)
-    except lotstore.LotError as err:
-        logger.error(err)
-        return None
+    name, values = lot_number, None
+    while True:
+        edited = lot_editor.edit_values(store, product, lot_number, name, values)
+        if edited is None:
+            return None
+        name, values = edited
+        show(lotstore.ValueSet(name=name, genomic=values, lot_numbers=[lot_number], product=product))
+        action = ask(questionary.select(f"Save value set '{name}' for lot {lot_number}?", choices=[
+            questionary.Choice("Save", value="save"),
+            questionary.Choice("Edit the values again", value="edit"),
+            questionary.Choice("Cancel", value="cancel"),
+        ]))
+        if action == "cancel":
+            return None
+        if action == "save":
+            try:
+                return store.create(name, lot_number, values, product)
+            except lotstore.LotError as err:
+                logger.error(err)
 
 
 def resolve_lot(store, lot_number):
