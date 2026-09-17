@@ -27,6 +27,7 @@ from pathlib import Path
 import questionary
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import run_in_terminal
+from prompt_toolkit.document import Document
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.lexers import SimpleLexer
@@ -297,7 +298,7 @@ class _PathValidator(Validator):
             raise ValidationError(message=problem, cursor_position=len(document.text))
 
 
-def path_prompt(message, validate, history=()):
+def path_prompt(message, validate, history=(), default=""):
     """A path prompt with bash-style Tab: complete to the common prefix, list the choices on a second Tab."""
     bindings = KeyBindings()
 
@@ -326,6 +327,7 @@ def path_prompt(message, validate, history=()):
         key_bindings=bindings,
         history=InMemoryHistory(list(reversed(history))),
     )
+    session.default_buffer.reset(Document(default))
     return questionary.Question(session.app)
 
 
@@ -359,14 +361,15 @@ def display_path(folder):
         return str(folder)
 
 
-def type_path(message, check, kind):
-    """Returns the typed folder, or None when the answer is empty (go back)."""
+def type_path(message, check, kind, prefill=None):
+    """Returns the typed folder, or None when the answer is empty (go back). A prefill folder starts in the line, ready to edit."""
     def problem(text):
         return check(Path(text.strip()).expanduser()) if text.strip() else None
 
     recents = [display_path(p) for p in load_recent_folders(kind)]
     hint = "Tab completes, Up/Down recalls recent folders, empty goes back" if recents else "Tab completes, empty goes back"
-    text = ask(path_prompt(f"{message} ({hint}):", problem, recents)).strip()
+    default = os.path.join(str(prefill), "") if prefill else ""
+    text = ask(path_prompt(f"{message} ({hint}):", problem, recents, default)).strip()
     return Path(text).expanduser() if text else None
 
 
@@ -392,7 +395,7 @@ def pick_folder():
     choices.append(questionary.Separator(" "))
     choices.append(questionary.Choice("Type a path...", value=""))
     answer = ask(questionary.select("Folder containing your FASTQ files:", choices=choices))
-    return Path(answer) if answer else type_path("Folder containing your FASTQ files", folder_problem, "input")
+    return type_path("Folder containing your FASTQ files", folder_problem, "input", Path(answer) if answer else None)
 
 
 def show_samples(folder, pairs):
