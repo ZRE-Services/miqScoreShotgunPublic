@@ -42,7 +42,6 @@ CONTAINER_DATA = "/data"
 DEFAULT_SUBSAMPLE_READS = 1_000_000
 VALID_SAMPLE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\- ]*$")
 RESULTS_DIR = lotstore.REPO_ROOT / "results"
-RESULTS_SUBFOLDER = "miqscore_results"  # run folders in a custom results folder go in here
 RECENTS_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "miqscore"
 MAX_RECENTS = 10
 ENTER_LOT = "_enter_lot"  # value set names must start with a letter or digit, so this cannot clash
@@ -58,7 +57,7 @@ def parse_arguments():
     choice.add_argument("--lot", help="Lot number of the microbial community standard")
     choice.add_argument("--value-set", help="Name of a saved value set in lots/ to use without a lot number")
     parser.add_argument("--subsample", type=int, help="Reads to subsample per file (0 disables subsampling)")
-    parser.add_argument("--output", type=Path, help=f"Folder for the results (default: {RESULTS_DIR}); other folders get a {RESULTS_SUBFOLDER}/ subfolder")
+    parser.add_argument("--output", type=Path, help=f"Folder to create the run folder in (default: {RESULTS_DIR})")
     parser.add_argument("--image", default=DOCKER_IMAGE, help=f"Docker image to run (default: {DOCKER_IMAGE})")
     return parser.parse_args()
 
@@ -474,10 +473,7 @@ def choose_output(preset):
             folder = type_path("Results folder", output_problem, "output", Path(answer) if answer else None)
         folder = folder.resolve()
     if folder != RESULTS_DIR:
-        if folder.name != RESULTS_SUBFOLDER:
-            folder = folder / RESULTS_SUBFOLDER
         remember_folder("output", folder)
-    logger.info(f"Results folder: {folder}")
     return folder
 
 
@@ -651,7 +647,7 @@ def main():
 
     current_date = datetime.now().strftime("%y%m%d")
     values_label = f"lot{lot_number}" if lot_number else f"set{value_set.name}"
-    base_folder = output_root / f"{current_date}_{input_folder.name}_{reads_label(num_reads)}_{values_label}_miqscore"
+    base_folder = output_root / f"miqscore_{current_date}_{input_folder.name}_{reads_label(num_reads)}_{values_label}"
     logger.info(f"Analysis folder: {base_folder}")
     input_seq = base_folder / "input" / "sequence"
     output_folder = base_folder / "output"
