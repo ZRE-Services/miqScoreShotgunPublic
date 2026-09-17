@@ -42,6 +42,7 @@ CONTAINER_DATA = "/data"
 DEFAULT_SUBSAMPLE_READS = 1_000_000
 VALID_SAMPLE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\- ]*$")
 RESULTS_DIR = lotstore.REPO_ROOT / "results"
+RESULTS_SUBFOLDER = "miqscore_results"  # run folders in a custom results folder go in here
 RECENTS_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "miqscore"
 MAX_RECENTS = 10
 ENTER_LOT = "_enter_lot"  # value set names must start with a letter or digit, so this cannot clash
@@ -57,7 +58,7 @@ def parse_arguments():
     choice.add_argument("--lot", help="Lot number of the microbial community standard")
     choice.add_argument("--value-set", help="Name of a saved value set in lots/ to use without a lot number")
     parser.add_argument("--subsample", type=int, help="Reads to subsample per file (0 disables subsampling)")
-    parser.add_argument("--output", type=Path, help=f"Folder to create the run folder in (default: {RESULTS_DIR})")
+    parser.add_argument("--output", type=Path, help=f"Folder for the results (default: {RESULTS_DIR}); other folders get a {RESULTS_SUBFOLDER}/ subfolder")
     parser.add_argument("--image", default=DOCKER_IMAGE, help=f"Docker image to run (default: {DOCKER_IMAGE})")
     return parser.parse_args()
 
@@ -389,14 +390,14 @@ def pick_folder():
     nearby_paths = {folder for folder, _ in nearby}
     recent = with_sample_counts([p for p in load_recent_folders("input") if p not in nearby_paths])
     if not nearby and not recent:
-        return type_path("Folder containing your FASTQ files", folder_problem, "input")
+        return type_path("FASTQ folder", folder_problem, "input")
     choices = folder_choices("-- In this directory --",
                              [("./" if f == base else str(f.relative_to(base)), f, n) for f, n in nearby])
     choices += folder_choices("-- Recent --", [(display_path(f), f, n) for f, n in recent])
     choices.append(questionary.Separator(" "))
     choices.append(questionary.Choice("Type a path...", value=""))
     answer = ask(questionary.select("Folder containing your FASTQ files:", choices=choices), erase=True)
-    return type_path("Path", folder_problem, "input", Path(answer) if answer else None)
+    return type_path("FASTQ folder", folder_problem, "input", Path(answer) if answer else None)
 
 
 def show_samples(folder, pairs):
@@ -470,10 +471,13 @@ def choose_output(preset):
                 choices += [questionary.Choice(display_path(p), value=str(p)) for p in recent]
             choices += [questionary.Separator(" "), questionary.Choice("Type a path...", value="")]
             answer = ask(questionary.select("Where should the results go?", choices=choices), erase=True)
-            folder = type_path("Path", output_problem, "output", Path(answer) if answer else None)
+            folder = type_path("Results folder", output_problem, "output", Path(answer) if answer else None)
         folder = folder.resolve()
     if folder != RESULTS_DIR:
+        if folder.name != RESULTS_SUBFOLDER:
+            folder = folder / RESULTS_SUBFOLDER
         remember_folder("output", folder)
+    logger.info(f"Results folder: {folder}")
     return folder
 
 
@@ -593,9 +597,22 @@ def read_score(output_folder, sample_name, not_before):
         return json.load(handle).get("miqScore")
 
 
+def clean_up(base_folder, reference_file):
+    """Keep only the reports, the summary, run_info.json and the reference file the container read."""
+    try:
+        reference_file.replace(base_folder / reference_file.name)
+        for name in ("input", "working"):
+            shutil.rmtree(base_folder / name, ignore_errors=True)
+        for path in (base_folder / "output").iterdir():
+            if path.suffix not in (".html", ".json"):
+                shutil.rmtree(path) if path.is_dir() else path.unlink()
+    except OSError as err:
+        logger.warning(f"Could not remove all intermediate files: {err}")
+
+
 def write_summary(base_folder, results):
     summary_path = base_folder / f"{base_folder.name}_summary.csv"
-    fields = ["sample", "miq_score", "raw_miq_score", "status", "lot_number", "value_set", "html_report"]
+    fields = ["sample", "miq_score", "raw_miq_score", "status", "lot_number", "value_set", "reference_file", "html_report"]
     with open(summary_path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -610,6 +627,11 @@ def write_summary(base_folder, results):
     print("=" * (width + 30))
     succeeded = sum(r["status"] == "ok" for r in results)
     logger.info(f"{succeeded}/{len(results)} samples succeeded. Summary written to {summary_path}")
+    try:
+        RESULTS_DIR.mkdir(exist_ok=True)
+        shutil.copy2(summary_path, RESULTS_DIR / summary_path.name)
+    except OSError as err:
+        logger.warning(f"Could not copy the summary to {RESULTS_DIR}: {err}")
 
 
 # ---------- main ----------
@@ -648,46 +670,48 @@ def main():
         }, handle, indent=2)
 
     results = []
-    for sample_name, files in fastq_pairs.items():
-        logger.info(f"Processing sample: {sample_name}")
-        result = {"sample": sample_name, "miq_score": "", "raw_miq_score": "", "status": "",
-                  "lot_number": lot_number or "", "value_set": value_set.name, "html_report": ""}
-        results.append(result)
+    try:
+        for sample_name, files in fastq_pairs.items():
+            logger.info(f"Processing sample: {sample_name}")
+            result = {"sample": sample_name, "miq_score": "", "raw_miq_score": "", "status": "",
+                      "lot_number": lot_number or "", "value_set": value_set.name,
+                      "reference_file": str(base_folder / reference_file.name), "html_report": ""}
+            results.append(result)
 
-        if not files["R1"] or not files["R2"]:
-            logger.warning(f"Missing R1 or R2 file for {sample_name}, skipping")
-            result["status"] = "skipped: missing R1/R2"
-            continue
-        if not VALID_SAMPLE_NAME.match(sample_name):
-            logger.warning(f"Sample name '{sample_name}' is not accepted by MIQScore, skipping")
-            result["status"] = "skipped: invalid sample name"
-            continue
+            if not files["R1"] or not files["R2"]:
+                logger.warning(f"Missing R1 or R2 file for {sample_name}, skipping")
+                result["status"] = "skipped: missing R1/R2"
+                continue
+            if not VALID_SAMPLE_NAME.match(sample_name):
+                logger.warning(f"Sample name '{sample_name}' is not accepted by MIQScore, skipping")
+                result["status"] = "skipped: invalid sample name"
+                continue
 
-        for old_file in input_seq.glob("*.fastq"):
-            old_file.unlink()
-        try:
-            for read in ("R1", "R2"):
-                process_fastq_file(files[read], input_seq / f"standard_submitted_{read}.fastq", num_reads)
-        except (OSError, subprocess.CalledProcessError) as err:
-            logger.error(f"Preparing FASTQ files for {sample_name} failed: {err}")
-            result["status"] = "failed: fastq preparation"
-            continue
+            for old_file in input_seq.glob("*.fastq"):
+                old_file.unlink()
+            try:
+                for read in ("R1", "R2"):
+                    process_fastq_file(files[read], input_seq / f"standard_submitted_{read}.fastq", num_reads)
+            except (OSError, subprocess.CalledProcessError) as err:
+                logger.error(f"Preparing FASTQ files for {sample_name} failed: {err}")
+                result["status"] = "failed: fastq preparation"
+                continue
 
-        started = time.time() - 1
-        if not run_docker_miqscore(args.image, base_folder, sample_name, reference_file, sudo_password):
-            logger.error(f"Docker failed for sample {sample_name}")
-            result["status"] = "failed: docker"
-            continue
-        score = read_score(output_folder, sample_name, started)
-        if score is None:
-            result["status"] = "failed: no report"
-            continue
-        result.update(miq_score=round(score), raw_miq_score=round(score, 2), status="ok",
-                      html_report=str(output_folder / f"{sample_name}.html"))
-        logger.info(f"Sample {sample_name}: MIQ score {round(score)}")
+            started = time.time() - 1
+            if not run_docker_miqscore(args.image, base_folder, sample_name, reference_file, sudo_password):
+                logger.error(f"Docker failed for sample {sample_name}")
+                result["status"] = "failed: docker"
+                continue
+            score = read_score(output_folder, sample_name, started)
+            if score is None:
+                result["status"] = "failed: no report"
+                continue
+            result.update(miq_score=round(score), raw_miq_score=round(score, 2), status="ok",
+                          html_report=str(output_folder / f"{sample_name}.html"))
+            logger.info(f"Sample {sample_name}: MIQ score {round(score)}")
 
-    for old_file in input_seq.glob("*.fastq"):
-        old_file.unlink()
+    finally:
+        clean_up(base_folder, reference_file)
     write_summary(base_folder, results)
 
 

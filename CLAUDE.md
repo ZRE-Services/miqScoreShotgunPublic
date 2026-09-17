@@ -83,7 +83,10 @@ run it writes a merged reference JSON to `<run folder>/working/reference_<set>.j
 - `lotstore.py` holds the storage, validation and merge logic and has no UI code. `run_miqscore.py` is the
   terminal UI (questionary prompts; no GUI/Tkinter). It handles folder choice, lot selection, seqtk
   subsampling, one `docker run` per `*_R1/_R2.fastq.gz` pair, and writes `<run folder name>_summary.csv` and
-  `run_info.json` into the dated run folder under the chosen output folder (default `results/`, gitignored).
+  `run_info.json` into the dated run folder under the chosen results folder (default `results/`, gitignored; any
+  other folder gets a `miqscore_results/` subfolder). After the run only the summary, `run_info.json`, the
+  `output/*.html`/`*.json` reports and the reference JSON (moved from `working/` to the run folder, and linked
+  from the CSV's `reference_file` column) are kept, and a copy of the summary CSV always goes to the repo's `results/`.
   Recent input/output folders are kept per user in `~/.config/miqscore/recent_{input,output}_folders.json`.
 - `lots/<name>.json` files are tracked in git. Each file is one value set that can cover several lot
   numbers (`lot_numbers`); a lot number may appear in only one file, and `name` must match the file name.
