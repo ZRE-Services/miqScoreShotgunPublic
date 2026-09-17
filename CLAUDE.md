@@ -71,6 +71,7 @@ There is no CI. The only automated tests cover the host-side lot store (see belo
 pip install -r requirements-wrapper.txt
 python -m pytest tests                      # all
 python -m pytest tests -k bacteria_only     # single test
+python check_lots.py --check                # validate lots/
 ```
 
 ## Host wrapper and lot-specific expected values
@@ -92,6 +93,10 @@ run it writes a merged reference JSON to `<run folder>/working/reference_<set>.j
   numbers (`lot_numbers`); a lot number may appear in only one file, and `name` must match the file name.
   Only `Genomic` values are entered; `GenomicBacteriaOnly` is derived by dropping the two yeasts and
   rescaling. `lots/default.json` holds the repo's original 12/2 values.
+- There is no automatic sync: lots are shared by committing `lots/` and pushing. `check_lots.py` checks each
+  file on its own (via `LotStore.check()`), reports lot numbers that are listed in several files (as happens
+  after two machines push the same lot), and asks how to consolidate them. `--check` only reports.
+  `tests/test_lotstore.py::test_committed_lot_files_are_valid` runs the same check on the real `lots/`.
 - The Genomic values must be > 0 and add up to 100. The MIQ calculator (`calculateObservedPercentOfExpected`)
   uses them as given against observed percentages that always add up to 100, and a value of 0 or null
   silently removes that organism from the score.

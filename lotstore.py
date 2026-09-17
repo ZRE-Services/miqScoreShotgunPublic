@@ -12,6 +12,7 @@ BASE_REFERENCES = {"standard": REPO_ROOT / "reference" / "zrCommunityStandard.js
 YEASTS = ("scerevisiae", "cneoformans")
 SUM_TOLERANCE = 0.01
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+BACTERIA_ONLY_MISMATCH = "GenomicBacteriaOnly does not match the values derived from Genomic."
 
 
 class LotError(ValueError):
@@ -129,15 +130,62 @@ class LotStore:
     def path_for(self, name: str) -> Path:
         return self.lots_dir / f"{name}.json"
 
-    def value_sets(self) -> list:
-        sets = []
-        for path in sorted(self.lots_dir.glob("*.json")):
+    def files(self) -> list:
+        return sorted(self.lots_dir.glob("*.json"))
+
+    def load(self, path: Path) -> ValueSet:
+        try:
             with open(path) as handle:
                 value_set = ValueSet.from_dict(json.load(handle))
-            if value_set.name != path.stem:
-                raise LotError(f"{path} has name '{value_set.name}'; the name must match the file name.")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
+            raise LotError(f"{path} could not be read: {err!r}") from err
+        if value_set.name != path.stem:
+            raise LotError(f"{path} has name '{value_set.name}'; the name must match the file name.")
+        return value_set
+
+    def value_sets(self) -> list:
+        return [self.load(path) for path in self.files()]
+
+    def check(self):
+        """Checks every file on its own. Returns (value sets that passed, [(file name, problem)])."""
+        sets, problems = [], []
+        for path in self.files():
+            try:
+                value_set = self.load(path)
+                value_set.validate()
+            except LotError as err:
+                problems.append((path.name, str(err)))
+                continue
+            with open(path) as handle:
+                stored = json.load(handle)["expectedValues"].get("GenomicBacteriaOnly")
+            if stored != value_set.bacteria_only:
+                problems.append((path.name, BACTERIA_ONLY_MISMATCH))
             sets.append(value_set)
-        return sets
+        return sets, problems
+
+    @staticmethod
+    def duplicate_lots(sets: list) -> dict:
+        """Maps each lot number listed in more than one value set to the names of those sets."""
+        owners = {}
+        for value_set in sets:
+            for lot in value_set.lot_numbers:
+                owners.setdefault(lot, []).append(value_set.name)
+        return {lot: names for lot, names in sorted(owners.items()) if len(names) > 1}
+
+    def write(self, value_set: ValueSet) -> Path:
+        """Writes a validated value set without the cross-set checks of save(); used to repair the library."""
+        value_set.validate()
+        path = self.path_for(value_set.name)
+        self.lots_dir.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as handle:
+            json.dump(value_set.to_dict(), handle, indent=2)
+            handle.write("\n")
+        return path
+
+    def remove_lot(self, value_set: ValueSet, lot_number: str) -> ValueSet:
+        updated = ValueSet(name=value_set.name, genomic=value_set.genomic, lot_numbers=[lot for lot in value_set.lot_numbers if lot != lot_number], product=value_set.product)
+        self.write(updated)
+        return updated
 
     def get(self, name: str):
         return next((s for s in self.value_sets() if s.name == name), None)
@@ -160,11 +208,7 @@ class LotStore:
             shared = set(other.lot_numbers) & set(value_set.lot_numbers)
             if shared:
                 raise LotError(f"Lot number(s) {', '.join(sorted(shared))} already belong to value set '{other.name}'.")
-        self.lots_dir.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as handle:
-            json.dump(value_set.to_dict(), handle, indent=2)
-            handle.write("\n")
-        return path
+        return self.write(value_set)
 
     def create(self, name: str, lot_number: str, genomic: dict, product: str = "standard") -> ValueSet:
         value_set = ValueSet(name=check_name(name, "value set name"), genomic=dict(genomic), lot_numbers=[check_name(lot_number, "lot number")], product=product)

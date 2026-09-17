@@ -221,15 +221,62 @@ Each file in `lots/` is one **value set**: one set of expected values that one o
 - A lot number can belong to only one value set.
 - `lots/default.json` holds the values built into the Docker image (12% for each bacterium, 2% for each
   yeast). It has no lot numbers until you link some to it.
-- The files are tracked in git. After adding or linking a lot, **commit the change to `lots/`** so
-  everyone else gets it:
-  ```bash
-  git add lots/
-  git commit -m "Add lot 280042"
-  ```
+- The files are tracked in git. New or linked lots stay on your computer until you upload them (see
+  below).
 
-You can edit the files by hand. The wrapper checks them when you save a new or linked lot, and
-`python -m pytest tests` checks the library code.
+You can edit the files by hand. The wrapper checks a value set when you save a new or linked lot, but it
+does not check hand-edited files. Run `python check_lots.py` after editing (see below).
+
+### Checking the library (`check_lots.py`)
+
+```bash
+python check_lots.py           # check, and offer to fix what can be fixed
+python check_lots.py --check   # only report; exit code 1 if anything is wrong
+```
+
+The script checks each file in `lots/` separately and lists every problem:
+
+- the file cannot be read, or its `name` does not match the file name
+- names or lot numbers with characters that are not allowed, or a lot number listed twice in one file
+- Genomic values that are missing, not greater than 0, or do not add up to 100
+- `GenomicBacteriaOnly` values that do not match the Genomic values. The script offers to recalculate
+  them.
+- **a lot number that belongs to more than one value set.** This happens when two computers add the same
+  lot and both upload it. For each such lot, the script shows the value sets and asks how to fix it:
+  - If the value sets hold the same values, **merge** them into the one you pick. All lot numbers move to
+    that file, and the other files are deleted.
+  - If the values differ, **keep the lot in one value set** and remove it from the others. Check the lot's
+    certificate to see which values are right.
+  - **Skip** leaves the files unchanged, and the lot is still reported at the end.
+
+Only files that pass the checks are checked for duplicate lot numbers, so fix broken files first and run
+the script again. Without a terminal (for example in a script), the script only reports, like `--check`.
+`python -m pytest tests` runs the same check on `lots/`.
+
+### Uploading lots (push to GitHub)
+
+There is no automatic sync. The wrapper only writes to `lots/` in your local copy of the repository. To
+share a new or changed value set, commit it and push it to GitHub
+(`https://github.com/ZRE-Services/miqScoreShotgunPublic`). You need write access to that repository.
+
+```bash
+git switch master              # upload to the branch everyone runs from
+git pull                       # get the lots others uploaded first
+python check_lots.py           # fix duplicate lot numbers and other problems
+git status lots/               # see what changed
+git add lots/
+git commit -m "Add lot 280042"
+git push
+```
+
+- **Pull before you add a lot**, too. Then the wrapper already knows the lots others uploaded and offers
+  to link to them, instead of creating a second value set for the same lot.
+- If `git push` is rejected because someone else pushed first, run `git pull`, then
+  `python check_lots.py` again, and push again.
+- If both of you created a file with the same name, `git pull` reports a merge conflict in that file.
+  Open the file, keep the correct values and the lot numbers from both versions, then
+  `git add lots/<name>.json`, run `python check_lots.py`, and `git commit`.
+- Other computers get the new lots when they run `git pull`.
 
 ## Output
 
@@ -299,6 +346,7 @@ without the wrapper.
 | `No *_R1.fastq.gz / *_R2.fastq.gz files found!` | Check the folder and the file names (`.fastq.gz`, `_R1`/`_R2` just before the extension). |
 | `Lot number(s) ... already belong to value set ...` | That lot is already linked to another value set. Use it, or fix the files in `lots/`. |
 | `... has name '...'; the name must match the file name` | A file in `lots/` was renamed by hand. Make its `name` match the file name. |
+| `Lot ... is listed in several value sets` | The same lot was added twice, usually on two computers. Run `python check_lots.py` to consolidate. |
 | `failed: docker` in the summary | Look at the Docker output above the summary and at `output/dada2.*.log`. |
 
 ## Development
@@ -306,8 +354,10 @@ without the wrapper.
 ```bash
 pip install -r requirements-wrapper.txt
 python -m pytest tests
+python check_lots.py --check
 ```
 
 - `lotstore.py` contains the lot library, validation and reference merging. It has no UI code, and all
   tests target it.
 - `run_miqscore.py` contains the prompts, FASTQ handling, Docker calls and summary.
+- `check_lots.py` checks and repairs `lots/`. It uses `lotstore.py` and the prompts from `run_miqscore.py`.

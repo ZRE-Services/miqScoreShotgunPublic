@@ -96,3 +96,48 @@ def test_write_reference(tmp_path):
     path = lotstore.ValueSet(name="setA", genomic=dict(BASE)).write_reference(tmp_path / "working")
     assert path.name == "reference_setA.json"
     assert json.loads(path.read_text()) == lotstore.load_base_reference()
+
+
+def test_committed_lot_files_are_valid():
+    store = lotstore.LotStore()
+    sets, problems = store.check()
+    assert problems == []
+    assert store.duplicate_lots(sets) == {}
+
+
+def test_check_reports_each_bad_file(store):
+    store.create("good", "1", BASE)
+    store.lots_dir.joinpath("broken.json").write_text("{")
+    store.lots_dir.joinpath("renamed.json").write_text(store.path_for("good").read_text())
+    data = json.loads(store.path_for("good").read_text())
+    data["name"] = "zero"
+    data["lot_numbers"] = ["2"]
+    data["expectedValues"]["Genomic"]["ecoli"] = 0
+    store.path_for("zero").write_text(json.dumps(data))
+    sets, problems = store.check()
+    assert [s.name for s in sets] == ["good"]
+    assert [name for name, _ in problems] == ["broken.json", "renamed.json", "zero.json"]
+
+
+def test_check_reports_stale_bacteria_only(store):
+    store.create("a", "1", BASE)
+    data = json.loads(store.path_for("a").read_text())
+    data["expectedValues"]["Genomic"] = dict(BASE, paeruginosa=13, ecoli=11)
+    store.path_for("a").write_text(json.dumps(data))
+    sets, problems = store.check()
+    assert problems == [("a.json", lotstore.BACTERIA_ONLY_MISMATCH)]
+    store.write(sets[0])
+    assert store.check()[1] == []
+
+
+def test_duplicate_lots_and_remove_lot(store):
+    store.create("a", "1", BASE)
+    store.create("b", "2", BASE)
+    data = json.loads(store.path_for("b").read_text())
+    data["lot_numbers"] = ["2", "1"]
+    store.path_for("b").write_text(json.dumps(data))
+    sets, _ = store.check()
+    assert store.duplicate_lots(sets) == {"1": ["a", "b"]}
+    store.remove_lot(store.get("b"), "1")
+    assert store.get("b").lot_numbers == ["2"]
+    assert store.duplicate_lots(store.check()[0]) == {}
