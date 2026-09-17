@@ -367,9 +367,8 @@ def type_path(message, check, kind, prefill=None):
         return check(Path(text.strip()).expanduser()) if text.strip() else None
 
     recents = [display_path(p) for p in load_recent_folders(kind)]
-    hint = "Tab completes, Up/Down recalls recent folders, empty goes back" if recents else "Tab completes, empty goes back"
     default = os.path.join(str(prefill), "") if prefill else ""
-    text = ask(path_prompt(f"{message} ({hint}):", problem, recents, default)).strip()
+    text = ask(path_prompt(f"{message}:", problem, recents, default)).strip()
     return Path(text).expanduser() if text else None
 
 
@@ -395,7 +394,7 @@ def pick_folder():
     choices.append(questionary.Separator(" "))
     choices.append(questionary.Choice("Type a path...", value=""))
     answer = ask(questionary.select("Folder containing your FASTQ files:", choices=choices))
-    return type_path("Folder containing your FASTQ files", folder_problem, "input", Path(answer) if answer else None)
+    return type_path("Path", folder_problem, "input", Path(answer) if answer else None)
 
 
 def show_samples(folder, pairs):
@@ -469,7 +468,7 @@ def choose_output(preset):
                 choices += [questionary.Choice(display_path(p), value=str(p)) for p in recent]
             choices += [questionary.Separator(" "), questionary.Choice("Type a path...", value="")]
             answer = ask(questionary.select("Where should the results go?", choices=choices))
-            folder = Path(answer) if answer else type_path("Folder for the results", output_problem, "output")
+            folder = Path(answer) if answer else type_path("Path", output_problem, "output")
         folder = folder.resolve()
     if folder != RESULTS_DIR:
         remember_folder("output", folder)
