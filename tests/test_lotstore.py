@@ -141,3 +141,42 @@ def test_duplicate_lots_and_remove_lot(store):
     store.remove_lot(store.get("b"), "1")
     assert store.get("b").lot_numbers == ["2"]
     assert store.duplicate_lots(store.check()[0]) == {}
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_non_finite_values_are_rejected(value):
+    with pytest.raises(lotstore.LotError):
+        lotstore.validate_genomic(dict(BASE, ecoli=value))
+
+
+@pytest.mark.parametrize("change", [
+    {"expectedValues": {"Genomic": None}},
+    {"expectedValues": {"Genomic": 100}},
+    {"lot_numbers": "A123"},
+    {"expectedValues": {"Genomic": dict(BASE, ecoli=float("nan"))}},
+])
+def test_check_reports_malformed_fields(store, change):
+    store.create("a", "1", BASE)
+    data = json.loads(store.path_for("a").read_text())
+    data.update(change)
+    store.path_for("a").write_text(json.dumps(data))
+    sets, problems = store.check()
+    assert sets == [] and [name for name, _ in problems] == ["a.json"]
+
+
+def test_value_sets_skip_unusable_files(store):
+    store.create("good", "1", BASE)
+    store.lots_dir.joinpath("broken.json").write_text("{")
+    data = json.loads(store.path_for("good").read_text())
+    data.update(name="zero", lot_numbers=["2"])
+    data["expectedValues"]["Genomic"]["ecoli"] = 0
+    store.path_for("zero").write_text(json.dumps(data))
+    assert [s.name for s in store.value_sets()] == ["good"]
+    assert store.get("zero") is None
+    assert store.find_by_lot("2") is None
+
+
+def test_write_reference_refuses_invalid_values(tmp_path):
+    with pytest.raises(lotstore.LotError):
+        lotstore.ValueSet(name="x", genomic=dict(BASE, ecoli=0)).write_reference(tmp_path)
+    assert not list(tmp_path.iterdir())

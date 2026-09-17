@@ -2,6 +2,7 @@
 
 import copy
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,13 +56,15 @@ def rescale_to_100(values: dict, digits: int = 2, exact: bool = False) -> dict:
 
 
 def validate_genomic(values: dict, product: str = "standard") -> None:
+    if not isinstance(values, dict):
+        raise LotError(f"Genomic expected values must be an object mapping organisms to numbers, got {values!r}.")
     expected = organisms(product)
     if set(values) != set(expected):
         missing = sorted(set(expected) - set(values))
         extra = sorted(set(values) - set(expected))
         raise LotError(f"Organisms do not match the {product} standard. Missing: {missing}. Unexpected: {extra}.")
     for key, value in values.items():
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             # 0 or null would silently drop the organism from the MIQ calculation.
             raise LotError(f"Expected value for {key} must be a number greater than 0, got {value!r}.")
     total = genomic_sum(values)
@@ -94,10 +97,13 @@ class ValueSet:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ValueSet":
+        lot_numbers = data.get("lot_numbers", [])
+        if not isinstance(lot_numbers, list):
+            raise LotError(f"lot_numbers must be a list, got {lot_numbers!r}.")
         return cls(
             name=data["name"],
             genomic=data["expectedValues"]["Genomic"],
-            lot_numbers=[str(lot) for lot in data.get("lot_numbers", [])],
+            lot_numbers=[str(lot) for lot in lot_numbers],
             product=data.get("product", "standard"),
         )
 
@@ -116,6 +122,7 @@ class ValueSet:
         return reference
 
     def write_reference(self, folder: Path) -> Path:
+        self.validate()  # last guard: never hand the image values that would silently skew the score
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"reference_{self.name}.json"
         with open(path, "w") as handle:
@@ -134,17 +141,22 @@ class LotStore:
         return sorted(self.lots_dir.glob("*.json"))
 
     def load(self, path: Path) -> ValueSet:
+        """Loads and validates one file; raises LotError for anything that cannot be used."""
         try:
             with open(path) as handle:
                 value_set = ValueSet.from_dict(json.load(handle))
+        except LotError as err:
+            raise LotError(f"{path.name}: {err}") from err
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
-            raise LotError(f"{path} could not be read: {err!r}") from err
+            raise LotError(f"{path.name} could not be read: {err!r}") from err
         if value_set.name != path.stem:
-            raise LotError(f"{path} has name '{value_set.name}'; the name must match the file name.")
+            raise LotError(f"{path.name} has name '{value_set.name}'; the name must match the file name.")
+        value_set.validate()
         return value_set
 
     def value_sets(self) -> list:
-        return [self.load(path) for path in self.files()]
+        """The usable value sets. Files that fail load() are left out; check() reports them."""
+        return self.check()[0]
 
     def check(self):
         """Checks every file on its own. Returns (value sets that passed, [(file name, problem)])."""
@@ -152,7 +164,6 @@ class LotStore:
         for path in self.files():
             try:
                 value_set = self.load(path)
-                value_set.validate()
             except LotError as err:
                 problems.append((path.name, str(err)))
                 continue

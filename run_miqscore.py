@@ -15,6 +15,7 @@ import getpass
 import gzip
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -116,9 +117,12 @@ def enter_genomic_values(product, defaults):
 
     def is_positive_number(text):
         try:
-            return float(text) > 0 or "Must be greater than 0"
+            value = float(text)
         except ValueError:
             return "Enter a number"
+        if not math.isfinite(value):
+            return "Enter a number"
+        return value > 0 or "Must be greater than 0"
 
     while True:
         print("\n  Enter the Genomic expected values (%) from the lot's certificate.")
@@ -216,7 +220,10 @@ def choose_lot(store, preset_lot, preset_value_set=None):
     if preset_value_set is not None:
         value_set = store.get(preset_value_set)
         if value_set is None:
-            logger.error(f"Unknown value set '{preset_value_set}'. Known: {', '.join(s.name for s in store.value_sets())}")
+            if store.path_for(preset_value_set).exists():
+                logger.error(f"Value set '{preset_value_set}' cannot be used; run python check_lots.py to see why.")
+            else:
+                logger.error(f"Unknown value set '{preset_value_set}'. Known: {', '.join(s.name for s in store.value_sets())}")
             sys.exit(1)
         logger.info(f"Using value set '{value_set.name}'")
         return None, value_set
@@ -632,9 +639,18 @@ def write_summary(base_folder, results):
 
 # ---------- main ----------
 
+def warn_unusable_lot_files(store):
+    unusable = [(name, problem) for name, problem in store.check()[1] if problem != lotstore.BACTERIA_ONLY_MISMATCH]
+    for name, problem in unusable:
+        logger.warning(f"Skipping lots/{name}: {problem}")
+    if unusable:
+        logger.warning("Run python check_lots.py to fix the files in lots/.")
+
+
 def main():
     args = parse_arguments()
     store = lotstore.LotStore()
+    warn_unusable_lot_files(store)
 
     input_folder, fastq_pairs = choose_folder(args.folder)
 
@@ -647,7 +663,8 @@ def main():
 
     current_date = datetime.now().strftime("%y%m%d")
     values_label = f"lot{lot_number}" if lot_number else f"set{value_set.name}"
-    base_folder = output_root / f"miqscore_{current_date}_{input_folder.name}_{reads_label(num_reads)}_{values_label}"
+    input_label = re.sub(r"[^A-Za-z0-9._-]", "_", input_folder.name)  # ':' would break the docker -v mount
+    base_folder = output_root / f"miqscore_{current_date}_{input_label}_{reads_label(num_reads)}_{values_label}"
     logger.info(f"Analysis folder: {base_folder}")
     input_seq = base_folder / "input" / "sequence"
     output_folder = base_folder / "output"

@@ -224,8 +224,9 @@ Each file in `lots/` is one **value set**: one set of expected values that one o
 - The files are tracked in git. New or linked lots stay on your computer until you upload them (see
   below).
 
-You can edit the files by hand. The wrapper checks a value set when you save a new or linked lot, but it
-does not check hand-edited files. Run `python check_lots.py` after editing (see below).
+You can edit the files by hand. Run `python check_lots.py` after editing (see below). The wrapper checks
+every file when it starts, and skips files it cannot use, with a warning. So a broken or invalid file is
+never used for a run.
 
 ### Checking the library (`check_lots.py`)
 
@@ -346,6 +347,7 @@ without the wrapper.
 | `No *_R1.fastq.gz / *_R2.fastq.gz files found!` | Check the folder and the file names (`.fastq.gz`, `_R1`/`_R2` just before the extension). |
 | `Lot number(s) ... already belong to value set ...` | That lot is already linked to another value set. Use it, or fix the files in `lots/`. |
 | `... has name '...'; the name must match the file name` | A file in `lots/` was renamed by hand. Make its `name` match the file name. |
+| `Skipping lots/...: ...` | That file cannot be used (see the reason). Run `python check_lots.py` and fix the file. |
 | `Lot ... is listed in several value sets` | The same lot was added twice, usually on two computers. Run `python check_lots.py` to consolidate. |
 | `failed: docker` in the summary | Look at the Docker output above the summary and at `output/dada2.*.log`. |
 

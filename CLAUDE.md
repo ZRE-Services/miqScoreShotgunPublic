@@ -97,6 +97,9 @@ run it writes a merged reference JSON to `<run folder>/working/reference_<set>.j
   file on its own (via `LotStore.check()`), reports lot numbers that are listed in several files (as happens
   after two machines push the same lot), and asks how to consolidate them. `--check` only reports.
   `tests/test_lotstore.py::test_committed_lot_files_are_valid` runs the same check on the real `lots/`.
+- `LotStore.load()` validates each file, and `value_sets()`/`get()`/`find_by_lot()` silently leave out files
+  that fail (the wrapper warns about them at startup). `ValueSet.write_reference()` validates again, so invalid
+  values never reach the image.
 - The Genomic values must be > 0 and add up to 100. The MIQ calculator (`calculateObservedPercentOfExpected`)
   uses them as given against observed percentages that always add up to 100, and a value of 0 or null
   silently removes that organism from the score.
