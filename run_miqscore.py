@@ -62,7 +62,9 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def ask(question):
+def ask(question, erase=False):
+    """erase=True leaves nothing on screen once answered, for steps whose answer is confirmed by a later prompt."""
+    question.application.erase_when_done = erase
     answer = question.ask()
     if answer is None:
         logger.info("Cancelled.")
@@ -393,7 +395,7 @@ def pick_folder():
     choices += folder_choices("-- Recent --", [(display_path(f), f, n) for f, n in recent])
     choices.append(questionary.Separator(" "))
     choices.append(questionary.Choice("Type a path...", value=""))
-    answer = ask(questionary.select("Folder containing your FASTQ files:", choices=choices))
+    answer = ask(questionary.select("Folder containing your FASTQ files:", choices=choices), erase=True)
     return type_path("Path", folder_problem, "input", Path(answer) if answer else None)
 
 
@@ -467,8 +469,8 @@ def choose_output(preset):
                 choices.append(questionary.Separator("-- Recent --"))
                 choices += [questionary.Choice(display_path(p), value=str(p)) for p in recent]
             choices += [questionary.Separator(" "), questionary.Choice("Type a path...", value="")]
-            answer = ask(questionary.select("Where should the results go?", choices=choices))
-            folder = Path(answer) if answer else type_path("Path", output_problem, "output")
+            answer = ask(questionary.select("Where should the results go?", choices=choices), erase=True)
+            folder = type_path("Path", output_problem, "output", Path(answer) if answer else None)
         folder = folder.resolve()
     if folder != RESULTS_DIR:
         remember_folder("output", folder)
