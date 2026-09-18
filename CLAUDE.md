@@ -52,7 +52,9 @@ docker build -t miqscoreshotgun .
 ```
 
 There is no local (non-Docker) run path documented or tested — BWA, minimap2, and samtools are compiled
-from source in the Dockerfile and expected on `PATH` at `/opt/...`. To run:
+from source in the Dockerfile and expected on `PATH` at `/opt/...`. The image installs `requirements-image.txt`
+(Python 3.7 pins); `requirements.txt` is the host wrapper's. `.dockerignore` keeps the wrapper, tests, `lots/`
+and run output out of the image. To run:
 
 ```bash
 docker container run -v [pathTo]/dataMountDirectory:/data -e SAMPLENAME=My_Sample_Name miqscoreshotgun
@@ -69,7 +71,7 @@ dataMountDirectory/
 There is no CI. The only automated tests cover the host-side wrapper: lot store, lot editor, and the
 new-lot flow of `run_miqscore.py` with the prompts replaced by scripted answers (see below):
 ```bash
-pip install -r requirements-wrapper.txt
+pip install -r requirements.txt
 python -m pytest tests                      # all
 python -m pytest tests -k bacteria_only     # single test
 python check_lots.py --check                # validate lots/

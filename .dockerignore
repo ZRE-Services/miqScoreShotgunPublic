@@ -1,0 +1,23 @@
+# Not needed inside the image (host wrapper, tests, run output, data folders)
+.git
+.gitignore
+.dockerignore
+__pycache__
+*.pyc
+.pytest_cache
+results
+tests
+lots
+run_miqscore.py
+lot_editor.py
+lotstore.py
+check_lots.py
+requirements.txt
+README.md
+CLAUDE.md
+WRAPPER.md
+exampleReport.html
+exampleReport.json
+*.fastq
+*.fastq.gz
+*.bam

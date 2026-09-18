@@ -57,11 +57,11 @@ RUN cd /opt && \
 
 COPY ./reference /opt/referenceBuild/reference
 
-COPY ./requirements.txt /opt/referenceBuild
+COPY ./requirements-image.txt /opt/referenceBuild
 
 #doing expensive and unlikely to change build processes here to speed up testing builds
 RUN cd /opt/referenceBuild/ && \
-    pip3 install --no-cache-dir -r requirements.txt && \
+    pip3 install --no-cache-dir -r requirements-image.txt && \
     cd reference && \
     echo "Indexing standard genome" && \
     bwa index zrCommunityStandard.fa
