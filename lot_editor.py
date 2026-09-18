@@ -20,6 +20,7 @@ MAX_COMPARED_LOTS = 3
 LOTS = "_lots"  # row key; organism keys never start with "_"
 SAVE = "save"  # run() results
 LINK = "link"
+BURST_ENDS = "\r\n\t"  # line ends and tabs that make a burst of keys a pasted column
 LABEL_W = 26
 NEW_W = 14
 COL_W = 13
@@ -95,6 +96,7 @@ class Sheet:
         self.cells = {key: fmt(self.default[key]) for key in self.keys}
         self.row, self.col = self.rows.index(self.keys[0]), 0
         self.editing = None
+        self.burst = None  # keys of an unmarked paste collected so far, see build_app()
         self.errors = {}  # row key -> problem, shown next to the row
         self.problems = []  # messages that belong to no single row
         self.note = ""
@@ -153,11 +155,21 @@ class Sheet:
             self.cells[self.current] = self.text(self.current, self.col)
             self.note = f"Copied {self.labels[self.current]} from {self.columns[self.col - 1].title}"
 
-    def line_feed(self):
-        """A paste the terminal did not mark as one (common over SSH) arrives as typing, with lines ending in CR
-        (handled as Enter) or LF. LF confirms like Enter but never opens a cell, so CR LF stays one line end."""
-        if self.editing is not None:
-            self.move(1)
+    def burst_key(self, text):
+        """Collects one key of an unmarked paste (see build_app); end_burst() handles the collected text."""
+        self.burst = (self.burst or "") + text
+
+    def end_burst(self):
+        """Text with line ends or tabs is a pasted column and goes through paste(), so an unmarked paste follows
+        the same rules as a bracketed one. Text without them is ordinary (fast or repeated) typing."""
+        text, self.burst = self.burst, None
+        if not text:
+            return
+        if any(char in text for char in BURST_ENDS):
+            self.paste(text)
+        else:
+            for char in text:
+                self.type(char)
 
     def escape(self):
         """Drops an unfinished edit. Returns False if there was none, i.e. the editor should close."""
@@ -278,33 +290,60 @@ def render(sheet):
 
 
 def build_app(sheet):
+    """Key bindings. A paste the terminal does not mark as one (common over SSH) arrives as ordinary keys, but all
+    in one read, so while more keys are queued the typed characters, Enter, LF and Tab are collected and handed to
+    Sheet.paste() as one text. Any other key, or the end of the queue, ends the collection. Reads are 1024 bytes,
+    enough for a column of values with its labels."""
     kb = KeyBindings()
-    kb.add("up")(lambda event: sheet.move(rows=-1))
-    kb.add("s-tab")(lambda event: sheet.move(rows=-1))
-    kb.add("down")(lambda event: sheet.move(rows=1))
-    kb.add("tab")(lambda event: sheet.move(rows=1))
-    kb.add("left")(lambda event: sheet.move(cols=-1))
-    kb.add("right")(lambda event: sheet.move(cols=1))
-    kb.add("backspace")(lambda event: sheet.backspace())
-    kb.add("delete")(lambda event: sheet.delete())
-    kb.add("c-r")(lambda event: sheet.rescale())
-    kb.add("c-c")(lambda event: event.app.exit(result=None))
-    kb.add(Keys.BracketedPaste)(lambda event: sheet.paste(event.data))
-    kb.add("c-j")(lambda event: sheet.line_feed())
+
+    def burst(event, text, otherwise):
+        queued = event.app.key_processor.input_queue
+        if sheet.burst is None and not queued:
+            otherwise()
+            return
+        sheet.burst_key(text)
+        if not queued:
+            sheet.end_burst()
+
+    def bind(*keys, **options):
+        """Binds a key that is never part of a paste; a collected paste is handled before it."""
+        def decorator(handler):
+            def handle(event):
+                sheet.end_burst()
+                handler(event)
+            for key in keys:
+                kb.add(key, **options)(handle)
+            return handler
+        return decorator
+
+    bind("up", "s-tab")(lambda event: sheet.move(rows=-1))
+    bind("down")(lambda event: sheet.move(rows=1))
+    bind("left")(lambda event: sheet.move(cols=-1))
+    bind("right")(lambda event: sheet.move(cols=1))
+    bind("backspace")(lambda event: sheet.backspace())
+    bind("delete")(lambda event: sheet.delete())
+    bind("c-r")(lambda event: sheet.rescale())
+    bind("c-c")(lambda event: event.app.exit(result=None))
+    bind(Keys.BracketedPaste)(lambda event: sheet.paste(event.data))
+
+    kb.add("tab")(lambda event: burst(event, "\t", lambda: sheet.move(rows=1)))
+    kb.add("c-j")(lambda event: burst(event, "\n", lambda: None))  # a bare LF is only ever part of a paste
 
     @kb.add("enter")
     def enter(event):
-        link = sheet.enter()
-        if link is not None:
-            event.app.exit(result=(LINK, link))
+        def otherwise():
+            link = sheet.enter()
+            if link is not None:
+                event.app.exit(result=(LINK, link))
+        burst(event, "\r", otherwise)
 
-    @kb.add("c-s")
+    @bind("c-s")
     def save(event):
         values = sheet.save()
         if values:
             event.app.exit(result=(SAVE, values))
 
-    @kb.add("escape", eager=True)
+    @bind("escape", eager=True)
     def escape(event):
         if not sheet.escape():
             event.app.exit(result=None)
@@ -312,7 +351,7 @@ def build_app(sheet):
     @kb.add("<any>")
     def typed(event):
         if len(event.data) == 1 and event.data.isprintable():
-            sheet.type(event.data)
+            burst(event, event.data, lambda: sheet.type(event.data))
 
     control = FormattedTextControl(lambda: render(sheet), focusable=True, key_bindings=kb, show_cursor=False)
     return Application(layout=Layout(HSplit([Window(control)])), style=STYLE, erase_when_done=True)

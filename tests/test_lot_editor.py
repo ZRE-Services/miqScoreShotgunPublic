@@ -196,9 +196,63 @@ def test_app_accepts_unmarked_paste(store, line_end):
     assert (action, values) == (lot_editor.SAVE, dict(zip(KEYS, CERTIFICATE_VALUES)))
 
 
-def test_line_feed_does_not_open_a_cell(sheet):
-    sheet.line_feed()
-    assert sheet.editing is None and sheet.current == KEYS[0]
+@pytest.mark.parametrize("line_end", ["\n", "\r", "\r\n"])
+def test_unmarked_paste_skips_blank_lines(store, line_end):
+    # An empty cell in the copied column, or a spacer line on the certificate, must not shift the values
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    text = CERTIFICATE.replace("\n", line_end).replace("9.29" + line_end, "9.29" + line_end + line_end)
+    action, values = run_keys(sheet, text, "\x13")
+    assert (action, values) == (lot_editor.SAVE, dict(zip(KEYS, CERTIFICATE_VALUES)))
+
+
+def test_unmarked_paste_leaves_out_what_does_not_fit(store):
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    assert run_keys(sheet, CERTIFICATE + "99\n", "\x03") is None
+    assert [float(sheet.cells[key]) for key in KEYS] == CERTIFICATE_VALUES
+    assert "1 more did not fit" in sheet.note
+
+
+def test_unmarked_paste_on_lot_row_starts_at_first_organism(store):
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    up = "\x1b[A"
+    assert run_keys(sheet, up, CERTIFICATE, "\x03") is None
+    assert [float(sheet.cells[key]) for key in KEYS] == CERTIFICATE_VALUES
+
+
+def test_unmarked_paste_on_other_column_changes_nothing(store):
+    # A capital C in the pasted text must not act as Shift-C (copy the column)
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    right = "\x1b[C"
+    assert run_keys(sheet, "13\r", right, "Cryptococcus\t1.61\n", "\x03") is None
+    assert sheet.cells[KEYS[0]] == "13"
+    assert sheet.cells[KEYS[-1]] == "2"
+    assert sheet.note == "Paste into the New column"
+
+
+def test_unmarked_paste_replaces_an_opened_cell(sheet):
+    sheet.enter()  # the cell shows "12" for editing when the paste arrives
+    for char in CERTIFICATE:
+        sheet.burst_key(char)
+    sheet.end_burst()
+    assert sheet.save() == dict(zip(KEYS, CERTIFICATE_VALUES))
+
+
+def test_burst_without_line_ends_is_typing(sheet):
+    # Key repeat can queue several keys; they must behave like typing, not like a paste
+    for char in "111":
+        sheet.burst_key(char)
+    sheet.end_burst()
+    assert sheet.editing == "111"
+    sheet.end_burst()  # nothing collected: no effect
+    assert sheet.editing == "111"
+
+
+def test_app_typing_then_arrows_keeps_the_value(store):
+    # Keys that arrive together are still ordinary typing when there is no line end among them
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    down = "\x1b[B"
+    assert run_keys(sheet, "13", down, "\x03") is None
+    assert sheet.cells[KEYS[0]] == "13"
 
 
 def test_app_accepts_bracketed_paste(store):
