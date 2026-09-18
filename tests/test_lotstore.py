@@ -72,6 +72,13 @@ def test_create_and_find_by_any_lot(store):
     assert saved["expectedValues"]["GenomicBacteriaOnly"]["ecoli"] == 12.5
 
 
+def test_find_by_values_matches_exactly(store):
+    store.create("111", BASE)
+    store.create("222", dict(BASE, paeruginosa=11, ecoli=13))
+    assert [s.index for s in store.find_by_values({k: float(v) for k, v in BASE.items()})] == [1]
+    assert store.find_by_values(dict(BASE, paeruginosa=11.99, ecoli=12.01)) == []
+
+
 def test_lot_number_cannot_belong_to_two_sets(store):
     store.create("111", BASE)
     store.create("222", BASE)

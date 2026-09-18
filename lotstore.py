@@ -253,6 +253,10 @@ class LotStore:
     def get(self, index: int):
         return next((s for s in self.value_sets() if s.index == index), None)
 
+    def find_by_values(self, genomic: dict, product: str = "standard") -> list:
+        """The value sets whose Genomic values are exactly these; a new lot with such values should be linked instead."""
+        return [s for s in self.value_sets() if s.product == product and s.genomic == genomic]
+
     def find_by_lot(self, lot_number: str):
         lot_number = lot_number.strip()
         matches = [s for s in self.value_sets() if lot_number in s.lot_numbers]

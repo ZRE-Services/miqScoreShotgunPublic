@@ -221,13 +221,19 @@ the table:
 - Move with the arrow keys (Tab/Shift-Tab also move down/up). You can go back to any cell at any time.
 - In the New column, start typing to overwrite a cell, or press **Enter** to edit the current value.
   **Enter** confirms and moves down, **Esc** drops the edit, **Del** clears the cell.
-- On another column, **Enter** copies that cell into New, and **Shift-C** copies the whole column. This
-  helps when a new lot differs from a saved one in only a few values.
+- On another set's column, **Enter** on a value copies it into New, and **Shift-C** copies the whole
+  column. This helps when a new lot differs from a saved one in only a few values.
+- If a saved set already has your lot's values, go to that set's **Lot number** row and press **Enter** to
+  link your lot to it instead. You see the set's full table and confirm; if you say no, you are back in
+  the table with your values.
 - **Ctrl-S** checks everything. Problems are shown next to the row and the cursor jumps to the first
   one. If only the total is off, **Ctrl-R** rescales the values to 100. **Esc** (or Ctrl-C) leaves the
   table without saving.
+- If a saved set has exactly the values you entered (every value equal, also sets not shown in the
+  table), the wrapper offers to link your lot to it instead of saving a second set with the same values.
+  You can still save a new set, or edit the values again.
 - After the check you see the full table and choose **Save**, **Edit the values again** (back to the
-  table with your values) or **Cancel**.
+  table with your values and cursor) or **Cancel**.
 
 ### Rules for expected values
 

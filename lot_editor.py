@@ -1,6 +1,7 @@
 """Table editor for a new lot's Genomic expected values, shown next to the defaults and recent lots.
 
-Sheet holds the editor state and key actions without terminal code; edit_values() runs it as a prompt_toolkit app.
+Sheet holds the editor state and key actions without terminal code; run() shows it as a prompt_toolkit app.
+The same Sheet can be run again, so the user returns to their values and cursor.
 """
 
 import math
@@ -15,6 +16,8 @@ import lotstore
 
 MAX_COMPARED_LOTS = 3
 LOTS = "_lots"  # row key; organism keys never start with "_"
+SAVE = "save"  # run() results
+LINK = "link"
 LABEL_W = 26
 NEW_W = 14
 COL_W = 13
@@ -34,7 +37,8 @@ STYLE = Style.from_dict({
 })
 
 HELP = ("←↑↓→ move · type to overwrite a New cell · Enter edit/confirm · Del clear\n"
-        "On another column: Enter copies the cell, Shift-C copies the whole column\n"
+        "On another set: Enter on a value copies it, Enter on its Lot number row links your lot to that set,\n"
+        "Shift-C copies the whole column\n"
         "Ctrl-S save · Ctrl-R rescale to 100 · Esc cancel edit / quit\n"
         "Values in %, each > 0, together 100. '12,5' and '12.5 %' are accepted.")
 
@@ -44,14 +48,15 @@ class Column:
     title: str
     lots: list
     values: dict
+    index: int
 
 
 def comparison_columns(store, product, count=MAX_COMPARED_LOTS):
     """The base reference values (set 0), then the most recently changed value sets."""
     base = lotstore.load_base_reference(product)["expectedValues"]["Genomic"]
     sets = [s for s in store.value_sets() if s.index != lotstore.DEFAULT_INDEX and s.product == product]
-    columns = [Column(f"Set {lotstore.DEFAULT_INDEX}", ["default"], base)]  # the full label is too wide for a column
-    return columns + [Column(s.label, s.lot_numbers, s.genomic) for s in store.newest_first(sets)[:count]]
+    columns = [Column(f"Set {lotstore.DEFAULT_INDEX}", ["default"], base, lotstore.DEFAULT_INDEX)]  # the full label is too wide
+    return columns + [Column(s.label, s.lot_numbers, s.genomic, s.index) for s in store.newest_first(sets)[:count]]
 
 
 def fmt(value):
@@ -77,15 +82,14 @@ def parse_value(text):
 class Sheet:
     """Cursor, cell texts and messages of the editor. Column 0 is the new value set, the others are read-only."""
 
-    def __init__(self, product, lot_number, columns, values=None):
+    def __init__(self, product, lot_number, columns):
         self.lot_number = lot_number
         self.columns = columns
         self.keys = lotstore.organisms(product)
         self.labels = dict(lotstore.print_names(product), **{LOTS: "Lot number"})
         self.rows = [LOTS] + self.keys
         self.default = columns[0].values
-        start = values or self.default
-        self.cells = {key: fmt(start[key]) for key in self.keys}
+        self.cells = {key: fmt(self.default[key]) for key in self.keys}
         self.row, self.col = self.rows.index(self.keys[0]), 0
         self.editing = None
         self.errors = {}  # row key -> problem, shown next to the row
@@ -134,6 +138,9 @@ class Sheet:
             self.cells[self.current] = ""
 
     def enter(self):
+        """Returns the index of the set to link the lot to when Enter is pressed on a set's lot number row."""
+        if self.col > 0 and self.current == LOTS:
+            return self.columns[self.col - 1].index
         if self.editable():
             if self.editing is None:
                 self.editing = self.cells[self.current]
@@ -230,6 +237,9 @@ def render(sheet):
     out.append(("", "\n"))
     out += [("class:compare", f"  {column.title}: lots {', '.join(column.lots)}\n") for column in sheet.columns[1:]]
     out.append(("", "\n"))
+    if sheet.col > 0 and sheet.current == LOTS:
+        column = sheet.columns[sheet.col - 1]
+        out.append(("class:note", f"  Enter: link lot {sheet.lot_number} to {lotstore.set_label(column.index)} instead of saving new values\n"))
     out += [("class:error", f"  {message}\n") for message in sheet.problems]
     if sheet.note:
         out.append(("class:note", f"  {sheet.note}\n"))
@@ -245,17 +255,22 @@ def build_app(sheet):
     kb.add("tab")(lambda event: sheet.move(rows=1))
     kb.add("left")(lambda event: sheet.move(cols=-1))
     kb.add("right")(lambda event: sheet.move(cols=1))
-    kb.add("enter")(lambda event: sheet.enter())
     kb.add("backspace")(lambda event: sheet.backspace())
     kb.add("delete")(lambda event: sheet.delete())
     kb.add("c-r")(lambda event: sheet.rescale())
     kb.add("c-c")(lambda event: event.app.exit(result=None))
 
+    @kb.add("enter")
+    def enter(event):
+        link = sheet.enter()
+        if link is not None:
+            event.app.exit(result=(LINK, link))
+
     @kb.add("c-s")
     def save(event):
-        result = sheet.save()
-        if result:
-            event.app.exit(result=result)
+        values = sheet.save()
+        if values:
+            event.app.exit(result=(SAVE, values))
 
     @kb.add("escape", eager=True)
     def escape(event):
@@ -271,7 +286,10 @@ def build_app(sheet):
     return Application(layout=Layout(HSplit([Window(control)])), style=STYLE, erase_when_done=True)
 
 
-def edit_values(store, product, lot_number, values=None):
-    """Returns the Genomic values or None if the user cancelled."""
-    sheet = Sheet(product, lot_number, comparison_columns(store, product), values)
+def new_sheet(store, product, lot_number):
+    return Sheet(product, lot_number, comparison_columns(store, product))
+
+
+def run(sheet):
+    """Returns (SAVE, Genomic values), (LINK, set index), or None if the user cancelled."""
     return build_app(sheet).run()

@@ -23,7 +23,7 @@ def store(tmp_path):
 
 @pytest.fixture
 def sheet(store):
-    columns = [lot_editor.Column("Set 0", ["default"], BASE), lot_editor.Column("Set 1", ["111"], OTHER)]
+    columns = [lot_editor.Column("Set 0", ["default"], BASE, 0), lot_editor.Column("Set 1", ["111"], OTHER, 1)]
     return lot_editor.Sheet("standard", "999", columns)
 
 
@@ -78,6 +78,21 @@ def test_copy_cell_and_column_from_other_lot(sheet):
     assert {key: float(sheet.cells[key]) for key in KEYS} == OTHER
 
 
+def test_enter_on_a_sets_lot_row_asks_to_link(sheet):
+    sheet.move(rows=-1, cols=2)
+    assert sheet.current == lot_editor.LOTS
+    assert sheet.enter() == 1
+    assert "link lot 999 to Set 1" in "".join(text for _, text in lot_editor.render(sheet))
+    sheet.move(cols=-2)
+    assert sheet.enter() is None  # the New column's lot row is fixed
+
+
+def test_enter_on_a_value_still_copies(sheet):
+    sheet.move(cols=2)
+    assert sheet.enter() is None
+    assert sheet.cells[KEYS[0]] == "11"
+
+
 def test_save_reports_bad_rows_and_moves_cursor(sheet):
     sheet.move(rows=2)
     sheet.delete()
@@ -113,11 +128,25 @@ def test_comparison_columns_show_newest_lots_first(store):
     assert titles == ["Set 0", "Set 2", "Set 4", "Set 3"]
 
 
-def test_app_runs_with_keystrokes(store):
-    sheet = lot_editor.Sheet("standard", "999", lot_editor.comparison_columns(store, "standard"))
+def run_keys(sheet, *keys):
     with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
-        pipe.send_text("13\r")      # P. aeruginosa: 13, then Enter confirms and moves down
-        pipe.send_text("11\r")      # E. coli: 11
-        pipe.send_text("\x13")      # Ctrl-S
-        result = lot_editor.build_app(sheet).run()
+        for key in keys:
+            pipe.send_text(key)
+        return lot_editor.run(sheet)
+
+
+def test_app_runs_with_keystrokes(store):
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    # P. aeruginosa: 13, then Enter confirms and moves down; E. coli: 11; Ctrl-S
+    action, result = run_keys(sheet, "13\r", "11\r", "\x13")
+    assert action == lot_editor.SAVE
     assert result == {key: float(value) for key, value in dict(BASE, paeruginosa=13, ecoli=11).items()}
+
+
+def test_app_links_from_a_sets_lot_row_and_keeps_state_for_the_next_run(store):
+    store.create("111", OTHER)
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    up, right = "\x1b[A", "\x1b[C"
+    assert run_keys(sheet, "13\r", up, up, right, right, "\r") == (lot_editor.LINK, 1)
+    assert sheet.cells[KEYS[0]] == "13"
+    assert run_keys(sheet, "\x03") is None  # Ctrl-C

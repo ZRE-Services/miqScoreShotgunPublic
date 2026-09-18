@@ -66,7 +66,8 @@ dataMountDirectory/
 +-- output/
 ```
 
-There is no CI. The only automated tests cover the host-side lot store (see below):
+There is no CI. The only automated tests cover the host-side wrapper: lot store, lot editor, and the
+new-lot flow of `run_miqscore.py` with the prompts replaced by scripted answers (see below):
 ```bash
 pip install -r requirements-wrapper.txt
 python -m pytest tests                      # all
@@ -84,7 +85,10 @@ run it writes a merged reference JSON to `<run folder>/working/reference_set<NNN
 - `lotstore.py` holds the storage, validation and merge logic and has no UI code. `lot_editor.py` is the
   prompt_toolkit table for entering a new lot's values next to the defaults and the 3 newest value sets
   (`LotStore.newest_first`, by last git commit); its `Sheet` class holds the state and key actions without
-  terminal code, so it is tested directly. `run_miqscore.py` is the
+  terminal code, so it is tested directly. The wrapper keeps one `Sheet` per new lot and reruns it, so the user
+  returns to their values after declining a link. `lot_editor.run()` returns `(SAVE, values)` or `(LINK, index)`
+  (Enter on a compared set's lot row); on SAVE the wrapper offers to link instead if `LotStore.find_by_values()`
+  finds a set with exactly those values. `run_miqscore.py` is the
   terminal UI (questionary prompts; no GUI/Tkinter). It handles folder choice, lot selection, seqtk
   subsampling, one `docker run` per `*_R1/_R2.fastq.gz` pair, and writes `<run folder name>_summary.csv` and
   `run_info.json` into the run folder `miqscore_<yymmdd>_<input folder>_<reads>_<lot or set>` under the chosen

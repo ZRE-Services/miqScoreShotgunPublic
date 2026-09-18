@@ -118,13 +118,44 @@ def pick_value_set(store, message):
     return None if index == BACK else store.get(index)
 
 
+def offer_link(store, value_set, lot_number):
+    """Shows the value set and links the lot to it if the user confirms. Returns the linked set or None."""
+    show(value_set)
+    if ask(questionary.confirm(f"Link lot {lot_number} to {value_set.label} (lots: {value_set.lots_text})?", default=True)):
+        return store.link_lot(value_set, lot_number)
+    return None
+
+
 def create_value_set(store, lot_number):
+    """Returns the new value set, or the existing one the lot was linked to instead, or None to go back."""
     product = "standard"
-    values = None
+    sheet = lot_editor.new_sheet(store, product, lot_number)
     while True:
-        values = lot_editor.edit_values(store, product, lot_number, values)
-        if values is None:
+        result = lot_editor.run(sheet)
+        if result is None:
             return None
+        action, payload = result
+        if action == lot_editor.LINK:
+            value_set = store.get(payload)
+            linked = value_set and offer_link(store, value_set, lot_number)
+            if linked:
+                return linked
+            continue
+        values = payload
+        same = store.find_by_values(values, product)
+        if same:
+            print()
+            for value_set in same:
+                print(f"  {value_set.label} (lots: {value_set.lots_text}) already has exactly these values.")
+            choice = ask(questionary.select("What now?", choices=[
+                *[questionary.Choice(f"Link lot {lot_number} to {s.label}", value=s.index) for s in same],
+                questionary.Choice("Save them as a new set anyway", value="new"),
+                questionary.Choice("Edit the values again", value="edit"),
+            ]))
+            if choice == "edit":
+                continue
+            if choice != "new":
+                return store.link_lot(store.get(choice), lot_number)
         preview = lotstore.ValueSet(index=store.next_index(), genomic=values, lot_numbers=[lot_number], product=product)
         show(preview)
         action = ask(questionary.select(f"Save as {preview.label} for lot {lot_number}?", choices=[
@@ -163,11 +194,9 @@ def resolve_lot(store, lot_number):
                 return created
             continue
         candidate = pick_value_set(store, "Pick a value set to link:")
-        if not candidate:
-            continue
-        show(candidate)
-        if ask(questionary.confirm(f"Link lot {lot_number} to {candidate.label} (lots: {candidate.lots_text})?", default=True)):
-            return store.link_lot(candidate, lot_number)
+        linked = candidate and offer_link(store, candidate, lot_number)
+        if linked:
+            return linked
 
 
 def choose_value_set_or_lot(store):
