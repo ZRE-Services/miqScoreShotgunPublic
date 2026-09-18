@@ -2,7 +2,7 @@
 """
 Check every value set in lots/ before committing it.
 
-- Each file must load, have a name matching the file name, and hold valid Genomic values.
+- Each file must load, be named after its index (setNNN.json), and hold valid Genomic values.
 - GenomicBacteriaOnly must match the values derived from Genomic (offers to recalculate it).
 - A lot number may belong to only one value set (offers to consolidate).
 
@@ -17,7 +17,7 @@ import questionary
 import lotstore
 from run_miqscore import ask, show
 
-SKIP = "_skip"  # value set names must start with a letter or digit, so this cannot clash
+SKIP = "_skip"  # value sets are chosen by their integer index, so this cannot clash
 
 
 def parse_args():
@@ -31,16 +31,17 @@ def report(store):
     duplicates = store.duplicate_lots(sets)
     for file_name, problem in problems:
         print(f"  {file_name}: {problem}")
-    for lot, names in duplicates.items():
-        print(f"  Lot {lot} is listed in several value sets: {', '.join(names)}")
+    for lot, indexes in duplicates.items():
+        print(f"  Lot {lot} is listed in several value sets: {', '.join(lotstore.set_label(i) for i in indexes)}")
     return sets, problems, duplicates
 
 
 def recalculate_bacteria_only(store, sets, problems):
     mismatched = {file_name for file_name, problem in problems if problem == lotstore.BACTERIA_ONLY_MISMATCH}
     for value_set in sets:
-        if store.path_for(value_set.name).name in mismatched and ask(questionary.confirm(
-                f"Recalculate GenomicBacteriaOnly in {value_set.name}.json from its Genomic values?", default=True)):
+        path = store.path_for(value_set.index)
+        if path.name in mismatched and ask(questionary.confirm(
+                f"Recalculate GenomicBacteriaOnly in {path.name} from its Genomic values?", default=True)):
             store.write(value_set)
 
 
@@ -48,31 +49,30 @@ def consolidate(store, lot, sets):
     print(f"\n  Lot {lot} is listed in {len(sets)} value sets:")
     for value_set in sets:
         show(value_set)
-    names = [s.name for s in sets]
     same_values = all(s.genomic == sets[0].genomic and s.product == sets[0].product for s in sets)
     if same_values:
         print("  They hold the same values, so they can be merged into one value set.")
-        choices = [questionary.Choice(f"Merge into '{name}' (the other files are deleted)", value=name) for name in names]
+        choices = [questionary.Choice(f"Merge into {s.label} (the other files are deleted)", value=s.index) for s in sets]
     else:
         print("  Their values differ. Check the lot's certificate to see which one is right.")
-        choices = [questionary.Choice(f"Keep lot {lot} only in '{name}'", value=name) for name in names]
+        choices = [questionary.Choice(f"Keep lot {lot} only in {s.label}", value=s.index) for s in sets]
     choices.append(questionary.Choice("Skip", value=SKIP))
     keep = ask(questionary.select(f"How should lot {lot} be consolidated?", choices=choices))
     if keep == SKIP:
         return
-    target = next(s for s in sets if s.name == keep)
-    others = [s for s in sets if s.name != keep]
+    target = next(s for s in sets if s.index == keep)
+    others = [s for s in sets if s.index != keep]
     if same_values:
         lots = list(target.lot_numbers)
         lots += [n for other in others for n in other.lot_numbers if n not in lots]
-        store.write(lotstore.ValueSet(name=target.name, genomic=target.genomic, lot_numbers=lots, product=target.product))
+        store.write(lotstore.ValueSet(index=target.index, genomic=target.genomic, lot_numbers=lots, product=target.product))
         for other in others:
-            store.path_for(other.name).unlink()
-        print(f"  Merged {', '.join(o.name for o in others)} into '{target.name}'.")
+            store.path_for(other.index).unlink()  # its index is never handed out again, see LotStore.next_index()
+        print(f"  Merged {', '.join(o.label for o in others)} into {target.label}.")
     else:
         for other in others:
             store.remove_lot(other, lot)
-        print(f"  Lot {lot} now belongs only to '{target.name}'.")
+        print(f"  Lot {lot} now belongs only to {target.label}.")
 
 
 def main():
@@ -87,11 +87,11 @@ def main():
         skipped = set()
         while True:
             sets, _ = store.check()
-            pending = {lot: names for lot, names in store.duplicate_lots(sets).items() if lot not in skipped}
+            pending = {lot: indexes for lot, indexes in store.duplicate_lots(sets).items() if lot not in skipped}
             if not pending:
                 break
-            lot, names = next(iter(pending.items()))
-            consolidate(store, lot, [s for s in sets if s.name in names])
+            lot, indexes = next(iter(pending.items()))
+            consolidate(store, lot, [s for s in sets if s.index in indexes])
             skipped.add(lot)  # asked once; a skipped lot is reported again below
         print("\nChecking again")
         sets, problems, duplicates = report(store)

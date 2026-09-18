@@ -14,6 +14,8 @@ BASE_REFERENCES = {"standard": REPO_ROOT / "reference" / "zrCommunityStandard.js
 YEASTS = ("scerevisiae", "cneoformans")
 SUM_TOLERANCE = 0.01
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+SET_FILE_PATTERN = re.compile(r"^set(\d{3,})$")
+DEFAULT_INDEX = 0  # set 0 holds the base reference values and covers no lot
 BACTERIA_ONLY_MISMATCH = "GenomicBacteriaOnly does not match the values derived from Genomic."
 
 
@@ -41,6 +43,14 @@ def check_name(value: str, what: str) -> str:
     if not NAME_PATTERN.match(value):
         raise LotError(f"Invalid {what} '{value}': use letters, digits, '.', '_' or '-', starting with a letter or digit.")
     return value
+
+
+def set_file_stem(index: int) -> str:
+    return f"set{index:03d}"
+
+
+def set_label(index: int) -> str:
+    return "Set 0 (default)" if index == DEFAULT_INDEX else f"Set {index}"
 
 
 def genomic_sum(values: dict) -> float:
@@ -79,7 +89,7 @@ def derive_bacteria_only(genomic: dict) -> dict:
 
 @dataclass
 class ValueSet:
-    name: str
+    index: int
     genomic: dict
     lot_numbers: list = field(default_factory=list)
     product: str = "standard"
@@ -88,9 +98,17 @@ class ValueSet:
     def bacteria_only(self) -> dict:
         return derive_bacteria_only(self.genomic)
 
+    @property
+    def label(self) -> str:
+        return set_label(self.index)
+
+    @property
+    def lots_text(self) -> str:
+        return ", ".join(self.lot_numbers) or "none"
+
     def to_dict(self) -> dict:
         return {
-            "name": self.name,
+            "index": self.index,
             "lot_numbers": self.lot_numbers,
             "product": self.product,
             "expectedValues": {"Genomic": self.genomic, "GenomicBacteriaOnly": self.bacteria_only},
@@ -102,18 +120,19 @@ class ValueSet:
         if not isinstance(lot_numbers, list):
             raise LotError(f"lot_numbers must be a list, got {lot_numbers!r}.")
         return cls(
-            name=data["name"],
+            index=data["index"],
             genomic=data["expectedValues"]["Genomic"],
             lot_numbers=[str(lot) for lot in lot_numbers],
             product=data.get("product", "standard"),
         )
 
     def validate(self) -> None:
-        check_name(self.name, "value set name")
+        if isinstance(self.index, bool) or not isinstance(self.index, int) or self.index < 0:
+            raise LotError(f"The set index must be a whole number of 0 or more, got {self.index!r}.")
         for lot in self.lot_numbers:
             check_name(lot, "lot number")
         if len(set(self.lot_numbers)) != len(self.lot_numbers):
-            raise LotError(f"Value set '{self.name}' lists a lot number more than once.")
+            raise LotError(f"{self.label} lists a lot number more than once.")
         validate_genomic(self.genomic, self.product)
 
     def build_reference(self) -> dict:
@@ -125,7 +144,7 @@ class ValueSet:
     def write_reference(self, folder: Path) -> Path:
         self.validate()  # last guard: never hand the image values that would silently skew the score
         folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"reference_{self.name}.json"
+        path = folder / f"reference_{set_file_stem(self.index)}.json"
         with open(path, "w") as handle:
             json.dump(self.build_reference(), handle, indent=4)
         return path
@@ -135,8 +154,8 @@ class LotStore:
     def __init__(self, lots_dir: Path = LOTS_DIR):
         self.lots_dir = Path(lots_dir)
 
-    def path_for(self, name: str) -> Path:
-        return self.lots_dir / f"{name}.json"
+    def path_for(self, index: int) -> Path:
+        return self.lots_dir / f"{set_file_stem(index)}.json"
 
     def files(self) -> list:
         return sorted(self.lots_dir.glob("*.json"))
@@ -150,9 +169,9 @@ class LotStore:
             raise LotError(f"{path.name}: {err}") from err
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
             raise LotError(f"{path.name} could not be read: {err!r}") from err
-        if value_set.name != path.stem:
-            raise LotError(f"{path.name} has name '{value_set.name}'; the name must match the file name.")
         value_set.validate()
+        if path.name != self.path_for(value_set.index).name:
+            raise LotError(f"{path.name} has index {value_set.index!r}; it must be named {self.path_for(value_set.index).name}.")
         return value_set
 
     def value_sets(self) -> list:
@@ -190,24 +209,36 @@ class LotStore:
                 committed.setdefault(Path(line).name, stamp)
 
         def changed(value_set):
-            path = self.path_for(value_set.name)
+            path = self.path_for(value_set.index)
             return committed.get(path.name) or path.stat().st_mtime
 
         return sorted(sets, key=changed, reverse=True)
 
+    def next_index(self) -> int:
+        """1 + the highest index ever used, counting files in the git history, so a deleted set's index is never reused."""
+        stems = [path.stem for path in self.files()]
+        try:
+            log = subprocess.run(["git", "log", "--all", "--format=", "--name-only", "--", "."], cwd=self.lots_dir,
+                                 capture_output=True, text=True, check=True).stdout
+            stems += [Path(line).stem for line in log.splitlines() if line]
+        except (OSError, subprocess.CalledProcessError):
+            pass
+        used = [int(match.group(1)) for match in map(SET_FILE_PATTERN.match, stems) if match]
+        return max(used + [DEFAULT_INDEX]) + 1
+
     @staticmethod
     def duplicate_lots(sets: list) -> dict:
-        """Maps each lot number listed in more than one value set to the names of those sets."""
+        """Maps each lot number listed in more than one value set to the indexes of those sets."""
         owners = {}
         for value_set in sets:
             for lot in value_set.lot_numbers:
-                owners.setdefault(lot, []).append(value_set.name)
-        return {lot: names for lot, names in sorted(owners.items()) if len(names) > 1}
+                owners.setdefault(lot, []).append(value_set.index)
+        return {lot: indexes for lot, indexes in sorted(owners.items()) if len(indexes) > 1}
 
     def write(self, value_set: ValueSet) -> Path:
         """Writes a validated value set without the cross-set checks of save(); used to repair the library."""
         value_set.validate()
-        path = self.path_for(value_set.name)
+        path = self.path_for(value_set.index)
         self.lots_dir.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as handle:
             json.dump(value_set.to_dict(), handle, indent=2)
@@ -215,35 +246,36 @@ class LotStore:
         return path
 
     def remove_lot(self, value_set: ValueSet, lot_number: str) -> ValueSet:
-        updated = ValueSet(name=value_set.name, genomic=value_set.genomic, lot_numbers=[lot for lot in value_set.lot_numbers if lot != lot_number], product=value_set.product)
+        updated = ValueSet(index=value_set.index, genomic=value_set.genomic, lot_numbers=[lot for lot in value_set.lot_numbers if lot != lot_number], product=value_set.product)
         self.write(updated)
         return updated
 
-    def get(self, name: str):
-        return next((s for s in self.value_sets() if s.name == name), None)
+    def get(self, index: int):
+        return next((s for s in self.value_sets() if s.index == index), None)
 
     def find_by_lot(self, lot_number: str):
         lot_number = lot_number.strip()
         matches = [s for s in self.value_sets() if lot_number in s.lot_numbers]
         if len(matches) > 1:
-            raise LotError(f"Lot {lot_number} is listed in several value sets: {', '.join(s.name for s in matches)}.")
+            raise LotError(f"Lot {lot_number} is listed in several value sets: {', '.join(s.label for s in matches)}.")
         return matches[0] if matches else None
 
     def save(self, value_set: ValueSet, overwrite: bool = False) -> Path:
         value_set.validate()
-        path = self.path_for(value_set.name)
+        path = self.path_for(value_set.index)
         if path.exists() and not overwrite:
-            raise LotError(f"A value set named '{value_set.name}' already exists.")
+            raise LotError(f"{value_set.label} already exists.")
         for other in self.value_sets():
-            if other.name == value_set.name:
+            if other.index == value_set.index:
                 continue
             shared = set(other.lot_numbers) & set(value_set.lot_numbers)
             if shared:
-                raise LotError(f"Lot number(s) {', '.join(sorted(shared))} already belong to value set '{other.name}'.")
+                raise LotError(f"Lot number(s) {', '.join(sorted(shared))} already belong to {other.label}.")
         return self.write(value_set)
 
-    def create(self, name: str, lot_number: str, genomic: dict, product: str = "standard") -> ValueSet:
-        value_set = ValueSet(name=check_name(name, "value set name"), genomic=dict(genomic), lot_numbers=[check_name(lot_number, "lot number")], product=product)
+    def create(self, lot_number: str, genomic: dict, product: str = "standard") -> ValueSet:
+        """Saves a new value set under the next free index."""
+        value_set = ValueSet(index=self.next_index(), genomic=dict(genomic), lot_numbers=[check_name(lot_number, "lot number")], product=product)
         self.save(value_set)
         return value_set
 
@@ -251,6 +283,6 @@ class LotStore:
         lot_number = check_name(lot_number, "lot number")
         if lot_number in value_set.lot_numbers:
             return value_set
-        updated = ValueSet(name=value_set.name, genomic=value_set.genomic, lot_numbers=value_set.lot_numbers + [lot_number], product=value_set.product)
+        updated = ValueSet(index=value_set.index, genomic=value_set.genomic, lot_numbers=value_set.lot_numbers + [lot_number], product=value_set.product)
         self.save(updated, overwrite=True)
         return updated

@@ -23,8 +23,8 @@ def store(tmp_path):
 
 @pytest.fixture
 def sheet(store):
-    columns = [lot_editor.Column("default", [], BASE), lot_editor.Column("old", ["111"], OTHER)]
-    return lot_editor.Sheet(store, "standard", "999", "999", columns)
+    columns = [lot_editor.Column("Set 0", ["default"], BASE), lot_editor.Column("Set 1", ["111"], OTHER)]
+    return lot_editor.Sheet("standard", "999", columns)
 
 
 def type_text(sheet, text):
@@ -34,7 +34,7 @@ def type_text(sheet, text):
 
 def test_starts_on_first_organism_with_default_values(sheet):
     assert sheet.current == KEYS[0]
-    assert sheet.save() == ("999", {key: float(value) for key, value in BASE.items()})
+    assert sheet.save() == {key: float(value) for key, value in BASE.items()}
 
 
 def test_typing_overwrites_and_enter_moves_down(sheet):
@@ -94,18 +94,8 @@ def test_save_reports_wrong_sum_and_rescale_fixes_it(sheet):
     assert sheet.save() is None
     assert "add up to 110" in sheet.problems[0]
     sheet.rescale()
-    name, values = sheet.save()
+    values = sheet.save()
     assert abs(lotstore.genomic_sum(values) - 100) <= lotstore.SUM_TOLERANCE
-
-
-def test_save_rejects_invalid_or_existing_name(sheet, store):
-    sheet.cells[lot_editor.NAME] = "bad name"
-    assert sheet.save() is None
-    assert sheet.current == lot_editor.NAME
-    store.create("taken", "1", BASE)
-    sheet.cells[lot_editor.NAME] = "taken"
-    assert sheet.save() is None
-    assert "already exists" in sheet.errors[lot_editor.NAME]
 
 
 def test_parse_value_accepts_comma_and_percent():
@@ -114,21 +104,20 @@ def test_parse_value_accepts_comma_and_percent():
 
 
 def test_comparison_columns_show_newest_lots_first(store):
-    for index, name in enumerate(["a", "b", "c", "d"]):
-        store.create(name, name, BASE)
-        os.utime(store.path_for(name), (1000 + index, 1000 + index))
-    store.write(lotstore.ValueSet(name="default", genomic=dict(BASE)))
+    store.write(lotstore.ValueSet(index=0, genomic=dict(BASE)))
+    for lot in ["a", "b", "c", "d"]:
+        created = store.create(lot, BASE)
+        os.utime(store.path_for(created.index), (1000 + created.index, 1000 + created.index))
+    os.utime(store.path_for(2), (5000, 5000))
     titles = [column.title for column in lot_editor.comparison_columns(store, "standard")]
-    assert titles == ["default", "d", "c", "b"]
+    assert titles == ["Set 0", "Set 2", "Set 4", "Set 3"]
 
 
 def test_app_runs_with_keystrokes(store):
-    sheet = lot_editor.Sheet(store, "standard", "999", "999", lot_editor.comparison_columns(store, "standard"))
+    sheet = lot_editor.Sheet("standard", "999", lot_editor.comparison_columns(store, "standard"))
     with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
         pipe.send_text("13\r")      # P. aeruginosa: 13, then Enter confirms and moves down
         pipe.send_text("11\r")      # E. coli: 11
         pipe.send_text("\x13")      # Ctrl-S
         result = lot_editor.build_app(sheet).run()
-    name, values = result
-    assert name == "999"
-    assert values == {key: float(value) for key, value in dict(BASE, paeruginosa=13, ecoli=11).items()}
+    assert result == {key: float(value) for key, value in dict(BASE, paeruginosa=13, ecoli=11).items()}

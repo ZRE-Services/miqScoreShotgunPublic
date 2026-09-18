@@ -45,7 +45,8 @@ VALID_SAMPLE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\- ]*$")
 RESULTS_DIR = lotstore.REPO_ROOT / "results"
 RECENTS_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "miqscore"
 MAX_RECENTS = 10
-ENTER_LOT = "_enter_lot"  # value set names must start with a letter or digit, so this cannot clash
+ENTER_LOT = "_enter_lot"  # value sets are chosen by their integer index, so this cannot clash
+BACK = "_back"  # questionary replaces a None value with the choice's title
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def parse_arguments():
     parser.add_argument("--folder", type=Path, help="Folder containing *_R1.fastq.gz / *_R2.fastq.gz pairs")
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument("--lot", help="Lot number of the microbial community standard")
-    choice.add_argument("--value-set", help="Name of a saved value set in lots/ to use without a lot number")
+    choice.add_argument("--set", type=int, metavar="N", help="Index of a saved value set (lots/setNNN.json) to use without a lot number")
     parser.add_argument("--subsample", type=int, help="Reads to subsample per file (0 disables subsampling)")
     parser.add_argument("--output", type=Path, help=f"Folder to create the run folder in (default: {RESULTS_DIR})")
     parser.add_argument("--image", default=DOCKER_IMAGE, help=f"Docker image to run (default: {DOCKER_IMAGE})")
@@ -85,14 +86,20 @@ def values_table(value_set):
         left = f"{rows[i][0]:<{width}} {rows[i][1]:>6g}"
         right = f"{rows[i + half][0]:<{width}} {rows[i + half][1]:>6g}" if i + half < len(rows) else ""
         lines.append(f"    {left}     {right}")
-    lots = ", ".join(value_set.lot_numbers) or "none"
-    return f"  Value set '{value_set.name}' (lots: {lots})\n" + "\n".join(lines)
+    return f"  {value_set.label} (lots: {value_set.lots_text})\n" + "\n".join(lines)
 
 
-def values_summary(value_set):
-    names = lotstore.print_names(value_set.product)
-    short = " | ".join(f"{names.get(k, k).replace(' ', '')[:5]} {v:g}" for k, v in value_set.genomic.items())
-    return f"{value_set.name:<24} {short}"
+def set_choices(sets):
+    """One line per value set: index, the lots it covers, then its values; the columns line up across sets."""
+    lots = {s.index: s.lots_text if s.lot_numbers else "-" for s in sets}
+    label_width = max(len(s.label) for s in sets)
+    lots_width = max(len(text) for text in lots.values())
+    choices = []
+    for s in sets:
+        names = lotstore.print_names(s.product)
+        short = " | ".join(f"{names.get(k, k).replace(' ', '')[:5]} {v:g}" for k, v in s.genomic.items())
+        choices.append(questionary.Choice(f"{s.label:<{label_width}}  lots {lots[s.index]:<{lots_width}}  {short}", value=s.index))
+    return choices
 
 
 def show(value_set):
@@ -106,22 +113,21 @@ def pick_value_set(store, message):
     if not sets:
         print("  No value sets saved yet.")
         return None
-    choices = [questionary.Choice(values_summary(s), value=s.name) for s in sets]
-    choices.append(questionary.Choice("<- Back", value=None))
-    name = ask(questionary.select(message, choices=choices))
-    return store.get(name) if name else None
+    choices = set_choices(sets) + [questionary.Choice("<- Back", value=BACK)]
+    index = ask(questionary.select(message, choices=choices))
+    return None if index == BACK else store.get(index)
 
 
 def create_value_set(store, lot_number):
     product = "standard"
-    name, values = lot_number, None
+    values = None
     while True:
-        edited = lot_editor.edit_values(store, product, lot_number, name, values)
-        if edited is None:
+        values = lot_editor.edit_values(store, product, lot_number, values)
+        if values is None:
             return None
-        name, values = edited
-        show(lotstore.ValueSet(name=name, genomic=values, lot_numbers=[lot_number], product=product))
-        action = ask(questionary.select(f"Save value set '{name}' for lot {lot_number}?", choices=[
+        preview = lotstore.ValueSet(index=store.next_index(), genomic=values, lot_numbers=[lot_number], product=product)
+        show(preview)
+        action = ask(questionary.select(f"Save as {preview.label} for lot {lot_number}?", choices=[
             questionary.Choice("Save", value="save"),
             questionary.Choice("Edit the values again", value="edit"),
             questionary.Choice("Cancel", value="cancel"),
@@ -130,7 +136,7 @@ def create_value_set(store, lot_number):
             return None
         if action == "save":
             try:
-                return store.create(name, lot_number, values, product)
+                return store.create(lot_number, values, product)
             except lotstore.LotError as err:
                 logger.error(err)
 
@@ -160,40 +166,40 @@ def resolve_lot(store, lot_number):
         if not candidate:
             continue
         show(candidate)
-        if ask(questionary.confirm(f"Link lot {lot_number} to '{candidate.name}'?", default=True)):
+        if ask(questionary.confirm(f"Link lot {lot_number} to {candidate.label} (lots: {candidate.lots_text})?", default=True)):
             return store.link_lot(candidate, lot_number)
 
 
 def choose_value_set_or_lot(store):
     """Returns (None, value_set) for a directly picked value set, or (lot_number, None) to look up a lot."""
-    choices = [questionary.Choice(values_summary(s), value=s.name) for s in store.value_sets()]
-    choices.append(questionary.Choice("Enter a lot number", value=ENTER_LOT))
-    name = ask(questionary.select("Expected values to use:", choices=choices))
-    if name == ENTER_LOT:
+    sets = store.value_sets()
+    choices = (set_choices(sets) if sets else []) + [questionary.Choice("Enter a lot number", value=ENTER_LOT)]
+    index = ask(questionary.select("Expected values to use:", choices=choices))
+    if index == ENTER_LOT:
         return ask(questionary.text("Lot number of the standard:", validate=lambda t: bool(t.strip()) or "Enter a lot number")).strip(), None
-    value_set = store.get(name)
+    value_set = store.get(index)
     show(value_set)
-    return None, value_set if ask(questionary.confirm(f"Use value set '{name}'?", default=True)) else None
+    return None, value_set if ask(questionary.confirm(f"Use {value_set.label}?", default=True)) else None
 
 
-def choose_lot(store, preset_lot, preset_value_set=None):
+def choose_lot(store, preset_lot, preset_set=None):
     """Returns (lot_number, value_set); lot_number is None when a value set was picked without a lot."""
-    if preset_value_set is not None:
-        value_set = store.get(preset_value_set)
+    if preset_set is not None:
+        value_set = store.get(preset_set)
         if value_set is None:
-            if store.path_for(preset_value_set).exists():
-                logger.error(f"Value set '{preset_value_set}' cannot be used; run python check_lots.py to see why.")
+            if store.path_for(preset_set).exists():
+                logger.error(f"{lotstore.set_label(preset_set)} cannot be used; run python check_lots.py to see why.")
             else:
-                logger.error(f"Unknown value set '{preset_value_set}'. Known: {', '.join(s.name for s in store.value_sets())}")
+                logger.error(f"There is no set {preset_set}. Known: {', '.join(str(s.index) for s in store.value_sets())}")
             sys.exit(1)
-        logger.info(f"Using value set '{value_set.name}'")
+        logger.info(f"Using {value_set.label} (lots: {value_set.lots_text})")
         return None, value_set
     lot_number = preset_lot
     while True:
         if lot_number is None:
             lot_number, value_set = choose_value_set_or_lot(store)
             if value_set:
-                logger.info(f"Using value set '{value_set.name}'")
+                logger.info(f"Using {value_set.label} (lots: {value_set.lots_text})")
                 return None, value_set
             if lot_number is None:
                 continue
@@ -204,7 +210,7 @@ def choose_lot(store, preset_lot, preset_value_set=None):
             logger.error(err)
             value_set = None
         if value_set:
-            logger.info(f"Using value set '{value_set.name}' for lot {lot_number}")
+            logger.info(f"Using {value_set.label} (lots: {value_set.lots_text}) for lot {lot_number}")
             return lot_number, value_set
         lot_number = None
 
@@ -615,7 +621,7 @@ def main():
 
     input_folder, fastq_pairs = choose_folder(args.folder)
 
-    lot_number, value_set = choose_lot(store, args.lot, args.value_set)
+    lot_number, value_set = choose_lot(store, args.lot, args.set)
     num_reads = choose_subsampling(args.subsample)
     output_root = choose_output(args.output)
 
@@ -623,7 +629,7 @@ def main():
     check_docker_image_available(args.image, sudo_password)
 
     current_date = datetime.now().strftime("%y%m%d")
-    values_label = f"lot{lot_number}" if lot_number else f"set{value_set.name}"
+    values_label = f"lot{lot_number}" if lot_number else f"set{value_set.index}"
     input_label = re.sub(r"[^A-Za-z0-9._-]", "_", input_folder.name)  # ':' would break the docker -v mount
     base_folder = output_root / f"miqscore_{current_date}_{input_label}_{reads_label(num_reads)}_{values_label}"
     logger.info(f"Analysis folder: {base_folder}")
@@ -648,7 +654,7 @@ def main():
         for sample_name, files in fastq_pairs.items():
             logger.info(f"Processing sample: {sample_name}")
             result = {"sample": sample_name, "miq_score": "", "raw_miq_score": "", "status": "",
-                      "lot_number": lot_number or "", "value_set": value_set.name,
+                      "lot_number": lot_number or "", "value_set": value_set.index,
                       "reference_file": str(base_folder / reference_file.name), "html_report": ""}
             results.append(result)
 

@@ -125,14 +125,14 @@ Any option you give skips the matching question, so runs can be scripted:
 |---|---|
 | `--folder PATH` | Folder containing the FASTQ files. The sample list is printed without asking for confirmation; the wrapper stops if the folder has no FASTQ pairs. |
 | `--lot LOT` | Lot number of the standard. If the lot is known, you only confirm its values; if not, you are asked how to set it up. |
-| `--value-set NAME` | Use the saved value set `lots/NAME.json` directly, without a lot number and without confirming. Cannot be combined with `--lot`. |
+| `--set N` | Use saved value set N (`lots/setNNN.json`) directly, without a lot number and without confirming. `--set 0` uses the default values. Cannot be combined with `--lot`. |
 | `--subsample N` | Subsample each file to `N` reads; `0` turns subsampling off |
 | `--output PATH` | Folder to create the run folder in (default: `results/` in the repository). Created if missing. |
 | `--image NAME` | Docker image to run (default `miqscoreshotgun`) |
 
 ```bash
 python run_miqscore.py --folder ~/runs/2025-09-flowcell3 --lot 270011 --subsample 1000000
-python run_miqscore.py --folder ~/runs/2025-09-flowcell3 --value-set default --subsample 0
+python run_miqscore.py --folder ~/runs/2025-09-flowcell3 --set 0 --subsample 0
 ```
 
 ## Input files
@@ -150,27 +150,32 @@ Only paired-end Illumina data with the standard (non-HMW) product is supported.
 
 ## Choosing the expected values
 
-The wrapper first lists the saved value sets (one line each), followed by **Enter a lot number**:
+Value sets have no names. Each one has a number (its index), and wherever a set is shown, the lots it
+covers are shown with it. The wrapper first lists the saved value sets (one line each), followed by
+**Enter a lot number**:
 
 ```
 ? Expected values to use:
- » default                  P.aer 12 | E.col 12 | S.ent 12 | ...
+ » Set 0 (default)  lots -                       P.aer 12 | E.col 12 | S.ent 12 | ...
+   Set 1            lots 261689, 238717, 252193  P.aer 10.47 | E.col 12.69 | ...
+   Set 2            lots 220318, 216503          P.aer 9.29 | E.col 14.4 | ...
    Enter a lot number
 ```
 
 **Pick a value set** to use it as it is, without typing a lot number. You see its full table and confirm
-it. The run is labelled with the value set's name, and the `lot_number` column of the summary stays empty.
+it. The run is labelled with the set's number (`_set2`), and the `lot_number` column of the summary stays
+empty.
 
 **Enter a lot number** to use the values that belong to your lot. The wrapper looks the lot up in `lots/`.
 
 **Known lot:** the wrapper shows its values, and you confirm them.
 
 ```
-  Value set 'default' (lots: 238717, 252193, 270011)
-    P. aeruginosa        12     S. aureus            12
-    E. coli              12     L. monocytogenes     12
+  Set 1 (lots: 261689, 238717, 252193)
+    P. aeruginosa     10.47     S. aureus         11.34
+    E. coli           12.69     L. monocytogenes   12.1
     ...
-? Use these values for lot 270011? (Y/n)
+? Use these values for lot 252193? (Y/n)
 ```
 
 **New lot:** you choose what to do.
@@ -193,24 +198,26 @@ it. The run is labelled with the value set's name, and the `lot_number` column o
 ### Entering new values
 
 The table shows the new values next to the standard's defaults and the three most recently changed
-value sets (by last commit in `lots/`; files that were never committed count as newest), so you can
-compare them while you type:
+value sets (set 0 and, by last commit in `lots/`, the newest other sets; files that were never committed
+count as newest), so you can compare them while you type. The lots of each compared set are listed under
+the table:
 
 ```
   New expected values (Genomic, %) for lot 270001
 
-                            New                default       261689
-  Value set name                  270001       default       261689
-  Lot number                      270001             -       261689
+                            New                  Set 0        Set 1        Set 2
+  Lot number                      270001       default  261689, 23…  220318, 21…
 
   P. aeruginosa                     10.9            12        10.47
   E. coli                                           12        12.69  <- missing
   S. enterica                         12            12        11.72
   ...
+
+  Set 1: lots 261689, 238717, 252193
+  Set 2: lots 220318, 216503
 ```
 
-- The **New** column starts with the default values; values you change are highlighted. The value set
-  name is the lot number unless you change it.
+- The **New** column starts with the default values; values you change are highlighted.
 - Move with the arrow keys (Tab/Shift-Tab also move down/up). You can go back to any cell at any time.
 - In the New column, start typing to overwrite a cell, or press **Enter** to edit the current value.
   **Enter** confirms and moves down, **Esc** drops the edit, **Del** clears the cell.
@@ -234,10 +241,11 @@ compare them while you type:
 ## The lot library (`lots/`)
 
 Each file in `lots/` is one **value set**: one set of expected values that one or more lot numbers share.
+Sets have no names, only a number (`index`), and the file is named after it: set 2 is `lots/set002.json`.
 
 ```json
 {
-  "name": "238717_252193",
+  "index": 2,
   "lot_numbers": ["238717", "252193"],
   "product": "standard",
   "expectedValues": {
@@ -247,11 +255,14 @@ Each file in `lots/` is one **value set**: one set of expected values that one o
 }
 ```
 
-- The file name must match `name`. Names and lot numbers may contain only letters, digits, `.`, `_` and
-  `-`, and must start with a letter or digit.
+- The file name must match `index` (three digits, zero-padded). Lot numbers may contain only letters,
+  digits, `.`, `_` and `-`, and must start with a letter or digit.
+- New sets get the next number: 1 + the highest number that ever existed in `lots/`, including files
+  deleted in earlier commits. A number is never reused, so `set 2` in an old summary always means the same
+  values.
 - A lot number can belong to only one value set.
-- `lots/default.json` holds the values built into the Docker image (12% for each bacterium, 2% for each
-  yeast). It has no lot numbers until you link some to it.
+- Set 0 (`lots/set000.json`) holds the values built into the Docker image (12% for each bacterium, 2% for
+  each yeast). It has no lot numbers until you link some to it.
 - The files are tracked in git. New or linked lots stay on your computer until you upload them (see
   below).
 
@@ -268,15 +279,15 @@ python check_lots.py --check   # only report; exit code 1 if anything is wrong
 
 The script checks each file in `lots/` separately and lists every problem:
 
-- the file cannot be read, or its `name` does not match the file name
-- names or lot numbers with characters that are not allowed, or a lot number listed twice in one file
+- the file cannot be read, or its `index` does not match the file name
+- lot numbers with characters that are not allowed, or a lot number listed twice in one file
 - Genomic values that are missing, not greater than 0, or do not add up to 100
 - `GenomicBacteriaOnly` values that do not match the Genomic values. The script offers to recalculate
   them.
 - **a lot number that belongs to more than one value set.** This happens when two computers add the same
   lot and both upload it. For each such lot, the script shows the value sets and asks how to fix it:
   - If the value sets hold the same values, **merge** them into the one you pick. All lot numbers move to
-    that file, and the other files are deleted.
+    that file, and the other files are deleted. Their numbers are not reused.
   - If the values differ, **keep the lot in one value set** and remove it from the others. Check the lot's
     certificate to see which values are right.
   - **Skip** leaves the files unchanged, and the lot is still reported at the end.
@@ -305,9 +316,11 @@ git push
   to link to them, instead of creating a second value set for the same lot.
 - If `git push` is rejected because someone else pushed first, run `git pull`, then
   `python check_lots.py` again, and push again.
-- If both of you created a file with the same name, `git pull` reports a merge conflict in that file.
-  Open the file, keep the correct values and the lot numbers from both versions, then
-  `git add lots/<name>.json`, run `python check_lots.py`, and `git commit`.
+- If both of you created a new set at the same time, you both got the same number, and `git pull`
+  reports a merge conflict in that file. If the values are the same, keep them and the lot numbers from
+  both versions. If they differ, keep the other person's version, then re-add your lot with the wrapper
+  after the pull (it gets the next free number). Then `git add lots/`, run `python check_lots.py`, and
+  `git commit`.
 - Other computers get the new lots when they run `git pull`.
 
 ## Output
@@ -317,7 +330,7 @@ Each run creates a folder inside the output folder you chose, by default `result
 changes to commit:
 
 ```
-<YYMMDD>_<fastq folder>_<reads>_lot<LOT>_miqscore/   (or ..._set<NAME>_miqscore/ for a picked value set)
+miqscore_<YYMMDD>_<fastq folder>_<reads>_lot<LOT>/   (or ..._set<N>/ for a value set picked without a lot)
 ├── <run folder name>_summary.csv   one row per sample
 ├── run_info.json                  date, input folder, lot, the exact values used, subsampling, image
 ├── input/sequence/                temporary FASTQ copies (emptied when the batch ends)
@@ -346,7 +359,7 @@ copied elsewhere without losing that information.
 | `raw_miq_score` | MIQ score to two decimals |
 | `status` | `ok`, `skipped: missing R1/R2`, `skipped: invalid sample name`, `failed: fastq preparation`, `failed: docker` or `failed: no report` |
 | `lot_number` | Lot entered for the run (empty if a value set was picked directly) |
-| `value_set` | Value set used for the run |
+| `value_set` | Number of the value set used for the run (`0` = default) |
 | `html_report` | Path to the HTML report |
 
 ## How it works
@@ -361,12 +374,12 @@ variable. For each run, the wrapper:
    ```bash
    docker container run --rm -v <run folder>:/data \
      -e SAMPLENAME=<sample> \
-     -e REFERENCEDATAFILE=/data/working/reference_<set>.json \
+     -e REFERENCEDATAFILE=/data/working/reference_set<NNN>.json \
      miqscoreshotgun
    ```
 
 Everything else in the reference file stays as it is. The good and bad example charts in the HTML report
-are the same for every lot. With `lots/default.json`, the scores are identical to running the image
+are the same for every lot. With set 0, the scores are identical to running the image
 without the wrapper.
 
 ## Troubleshooting
@@ -377,7 +390,7 @@ without the wrapper.
 | `seqtk not found; subsampling disabled` | Install seqtk, or run without subsampling. |
 | `No *_R1.fastq.gz / *_R2.fastq.gz files found!` | Check the folder and the file names (`.fastq.gz`, `_R1`/`_R2` just before the extension). |
 | `Lot number(s) ... already belong to value set ...` | That lot is already linked to another value set. Use it, or fix the files in `lots/`. |
-| `... has name '...'; the name must match the file name` | A file in `lots/` was renamed by hand. Make its `name` match the file name. |
+| `... has index ...; it must be named setNNN.json` | A file in `lots/` was renamed or its `index` edited by hand. Make the file name and `index` match. |
 | `Skipping lots/...: ...` | That file cannot be used (see the reason). Run `python check_lots.py` and fix the file. |
 | `Lot ... is listed in several value sets` | The same lot was added twice, usually on two computers. Run `python check_lots.py` to consolidate. |
 | `failed: docker` in the summary | Look at the Docker output above the summary and at `output/dada2.*.log`. |

@@ -14,8 +14,7 @@ from prompt_toolkit.styles import Style
 import lotstore
 
 MAX_COMPARED_LOTS = 3
-NAME = "_name"  # row keys; organism keys never start with "_"
-LOTS = "_lots"
+LOTS = "_lots"  # row key; organism keys never start with "_"
 LABEL_W = 26
 NEW_W = 14
 COL_W = 13
@@ -48,10 +47,11 @@ class Column:
 
 
 def comparison_columns(store, product, count=MAX_COMPARED_LOTS):
-    """The base reference values, then the most recently changed value sets."""
+    """The base reference values (set 0), then the most recently changed value sets."""
     base = lotstore.load_base_reference(product)["expectedValues"]["Genomic"]
-    sets = [s for s in store.value_sets() if s.name != "default" and s.product == product]
-    return [Column("default", [], base)] + [Column(s.name, s.lot_numbers, s.genomic) for s in store.newest_first(sets)[:count]]
+    sets = [s for s in store.value_sets() if s.index != lotstore.DEFAULT_INDEX and s.product == product]
+    columns = [Column(f"Set {lotstore.DEFAULT_INDEX}", ["default"], base)]  # the full label is too wide for a column
+    return columns + [Column(s.label, s.lot_numbers, s.genomic) for s in store.newest_first(sets)[:count]]
 
 
 def fmt(value):
@@ -77,16 +77,15 @@ def parse_value(text):
 class Sheet:
     """Cursor, cell texts and messages of the editor. Column 0 is the new value set, the others are read-only."""
 
-    def __init__(self, store, product, lot_number, name, columns, values=None):
-        self.store = store
+    def __init__(self, product, lot_number, columns, values=None):
         self.lot_number = lot_number
         self.columns = columns
         self.keys = lotstore.organisms(product)
-        self.labels = dict(lotstore.print_names(product), **{NAME: "Value set name", LOTS: "Lot number"})
-        self.rows = [NAME, LOTS] + self.keys
+        self.labels = dict(lotstore.print_names(product), **{LOTS: "Lot number"})
+        self.rows = [LOTS] + self.keys
         self.default = columns[0].values
         start = values or self.default
-        self.cells = {NAME: name, **{key: fmt(start[key]) for key in self.keys}}
+        self.cells = {key: fmt(start[key]) for key in self.keys}
         self.row, self.col = self.rows.index(self.keys[0]), 0
         self.editing = None
         self.errors = {}  # row key -> problem, shown next to the row
@@ -101,8 +100,6 @@ class Sheet:
         if col == 0:
             return self.lot_number if row == LOTS else self.cells[row]
         column = self.columns[col - 1]
-        if row == NAME:
-            return column.title
         if row == LOTS:
             return ", ".join(column.lots) or "-"
         return fmt(column.values.get(row))
@@ -144,7 +141,7 @@ class Sheet:
                 self.move(1)
         elif self.col > 0 and self.current in self.keys:
             self.cells[self.current] = self.text(self.current, self.col)
-            self.note = f"Copied {self.labels[self.current]} from '{self.columns[self.col - 1].title}'"
+            self.note = f"Copied {self.labels[self.current]} from {self.columns[self.col - 1].title}"
 
     def escape(self):
         """Drops an unfinished edit. Returns False if there was none, i.e. the editor should close."""
@@ -156,7 +153,7 @@ class Sheet:
     def copy_column(self):
         column = self.columns[self.col - 1]
         self.cells.update({key: fmt(column.values[key]) for key in self.keys})
-        self.note = f"Copied all values from '{column.title}'. Now change the ones that differ."
+        self.note = f"Copied all values from {column.title}. Now change the ones that differ."
 
     def parsed(self):
         values, errors = {}, {}
@@ -180,26 +177,24 @@ class Sheet:
         self.note = f"Rescaled from {lotstore.genomic_sum(values):g} to 100. Check the values against the certificate."
 
     def save(self):
-        """Checks everything. Returns (name, values) if they can be saved, else moves the cursor to the first problem."""
+        """Checks everything. Returns the values if they can be saved, else moves the cursor to the first problem."""
         self.commit()
         self.note = ""
         values, self.errors = self.parsed()
         self.problems = []
-        try:
-            name = lotstore.check_name(self.cells[NAME], "value set name")
-            if self.store.path_for(name).exists():
-                self.errors[NAME] = f"'{name}' already exists"
-        except lotstore.LotError as err:
-            self.errors[NAME] = str(err)
-        if len(values) == len(self.keys):
+        if not self.errors:
             total = lotstore.genomic_sum(values)
             if abs(total - 100) > lotstore.SUM_TOLERANCE:
                 self.problems.append(f"The values add up to {total:g}, but must add up to 100. Fix them or press Ctrl-R to rescale.")
         if not self.errors and not self.problems:
-            return name, values
+            return values
         if self.errors:
             self.row, self.col = next(i for i, row in enumerate(self.rows) if row in self.errors), 0
         return None
+
+
+def clip(text, width):
+    return text if len(text) <= width else text[:width - 1] + "…"
 
 
 def render(sheet):
@@ -228,10 +223,12 @@ def render(sheet):
         out.append(("", " "))
         for col in range(1, len(sheet.columns) + 1):
             style = "class:cursor" if here and sheet.col == col else "class:compare"
-            out += [(style, f"{sheet.text(row, col)[:COL_W - 2]:>{COL_W - 1}}"), ("", " ")]
+            out += [(style, f"{clip(sheet.text(row, col), COL_W - 2):>{COL_W - 1}}"), ("", " ")]
         if row in sheet.errors:
             out.append(("class:error", f" <- {sheet.errors[row]}"))
         out.append(("", "\n"))
+    out.append(("", "\n"))
+    out += [("class:compare", f"  {column.title}: lots {', '.join(column.lots)}\n") for column in sheet.columns[1:]]
     out.append(("", "\n"))
     out += [("class:error", f"  {message}\n") for message in sheet.problems]
     if sheet.note:
@@ -274,7 +271,7 @@ def build_app(sheet):
     return Application(layout=Layout(HSplit([Window(control)])), style=STYLE, erase_when_done=True)
 
 
-def edit_values(store, product, lot_number, name, values=None):
-    """Returns (value set name, Genomic values) or None if the user cancelled."""
-    sheet = Sheet(store, product, lot_number, name, comparison_columns(store, product), values)
+def edit_values(store, product, lot_number, values=None):
+    """Returns the Genomic values or None if the user cancelled."""
+    sheet = Sheet(product, lot_number, comparison_columns(store, product), values)
     return build_app(sheet).run()

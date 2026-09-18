@@ -78,7 +78,7 @@ python check_lots.py --check                # validate lots/
 
 The expected organism percentages differ between lots of the ZymoBIOMICS standard. Instead of building one
 image per lot, the host-side wrapper `run_miqscore.py` runs the unchanged `miqscoreshotgun` image. For each
-run it writes a merged reference JSON to `<run folder>/working/reference_<set>.json` and passes it in with
+run it writes a merged reference JSON to `<run folder>/working/reference_set<NNN>.json` and passes it in with
 `-e REFERENCEDATAFILE=/data/working/...`.
 
 - `lotstore.py` holds the storage, validation and merge logic and has no UI code. `lot_editor.py` is the
@@ -92,10 +92,13 @@ run it writes a merged reference JSON to `<run folder>/working/reference_<set>.j
   `output/*.html`/`*.json` reports and the reference JSON (moved from `working/` to the run folder, and linked
   from the CSV's `reference_file` column) are kept, and a copy of the summary CSV always goes to the repo's `results/`.
   Recent input/output folders are kept per user in `~/.config/miqscore/recent_{input,output}_folders.json`.
-- `lots/<name>.json` files are tracked in git. Each file is one value set that can cover several lot
-  numbers (`lot_numbers`); a lot number may appear in only one file, and `name` must match the file name.
-  Only `Genomic` values are entered; `GenomicBacteriaOnly` is derived by dropping the two yeasts and
-  rescaling. `lots/default.json` holds the repo's original 12/2 values.
+- `lots/setNNN.json` files are tracked in git. Each file is one value set that can cover several lot
+  numbers (`lot_numbers`); a lot number may appear in only one file. Sets have no names, only an integer
+  `index` that must match the zero-padded file name; the UI refers to them as "Set N" and always shows the
+  lots they cover. `LotStore.create()` assigns `next_index()` = 1 + the highest index in `lots/` or anywhere in
+  its git history, so indexes are never reused. Only `Genomic` values are entered; `GenomicBacteriaOnly` is
+  derived by dropping the two yeasts and rescaling. Set 0 (`lots/set000.json`) holds the repo's original
+  12/2 values.
 - There is no automatic sync: lots are shared by committing `lots/` and pushing. `check_lots.py` checks each
   file on its own (via `LotStore.check()`), reports lot numbers that are listed in several files (as happens
   after two machines push the same lot), and asks how to consolidate them. `--check` only reports.
