@@ -225,6 +225,7 @@ the table:
   line) or a row copied from Excel (tab-separated). They fill the New column downwards from the cursor,
   starting at P. aeruginosa if the cursor is on the Lot number row. Values that don't fit are left out,
   with a message. A single pasted value goes into the current cell like typing.
+  This also works over SSH, where the paste often arrives as if typed line by line.
 - On another set's column, **Enter** on a value copies it into New, and **Shift-C** copies the whole
   column. This helps when a new lot differs from a saved one in only a few values.
 - If a saved set already has your lot's values, go to that set's **Lot number** row and press **Enter** to

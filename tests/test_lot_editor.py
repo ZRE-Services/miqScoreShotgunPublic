@@ -189,6 +189,18 @@ def test_paste_on_other_column_changes_nothing(sheet):
     assert sheet.cells[KEYS[0]] == "12"
 
 
+@pytest.mark.parametrize("line_end", ["\n", "\r", "\r\n"])
+def test_app_accepts_unmarked_paste(store, line_end):
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    action, values = run_keys(sheet, CERTIFICATE.replace("\n", line_end), "\x13")
+    assert (action, values) == (lot_editor.SAVE, dict(zip(KEYS, CERTIFICATE_VALUES)))
+
+
+def test_line_feed_does_not_open_a_cell(sheet):
+    sheet.line_feed()
+    assert sheet.editing is None and sheet.current == KEYS[0]
+
+
 def test_app_accepts_bracketed_paste(store):
     sheet = lot_editor.new_sheet(store, "standard", "999")
     action, values = run_keys(sheet, "\x1b[200~" + CERTIFICATE + "\x1b[201~", "\x13")

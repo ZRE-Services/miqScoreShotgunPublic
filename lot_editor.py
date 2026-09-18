@@ -153,6 +153,12 @@ class Sheet:
             self.cells[self.current] = self.text(self.current, self.col)
             self.note = f"Copied {self.labels[self.current]} from {self.columns[self.col - 1].title}"
 
+    def line_feed(self):
+        """A paste the terminal did not mark as one (common over SSH) arrives as typing, with lines ending in CR
+        (handled as Enter) or LF. LF confirms like Enter but never opens a cell, so CR LF stays one line end."""
+        if self.editing is not None:
+            self.move(1)
+
     def escape(self):
         """Drops an unfinished edit. Returns False if there was none, i.e. the editor should close."""
         if self.editing is None:
@@ -284,6 +290,7 @@ def build_app(sheet):
     kb.add("c-r")(lambda event: sheet.rescale())
     kb.add("c-c")(lambda event: event.app.exit(result=None))
     kb.add(Keys.BracketedPaste)(lambda event: sheet.paste(event.data))
+    kb.add("c-j")(lambda event: sheet.line_feed())
 
     @kb.add("enter")
     def enter(event):
