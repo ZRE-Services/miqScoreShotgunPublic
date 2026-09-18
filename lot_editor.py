@@ -5,10 +5,12 @@ The same Sheet can be run again, so the user returns to their values and cursor.
 """
 
 import math
+import re
 from dataclasses import dataclass
 
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, Window
 from prompt_toolkit.styles import Style
 
@@ -37,6 +39,7 @@ STYLE = Style.from_dict({
 })
 
 HELP = ("←↑↓→ move · type to overwrite a New cell · Enter edit/confirm · Del clear\n"
+        "Paste a column of values (one per line, or a tab-separated row) to fill New downwards from the cursor\n"
         "On another set: Enter on a value copies it, Enter on its Lot number row links your lot to that set,\n"
         "Shift-C copies the whole column\n"
         "Ctrl-S save · Ctrl-R rescale to 100 · Esc cancel edit / quit\n"
@@ -157,6 +160,27 @@ class Sheet:
         self.editing = None
         return True
 
+    def paste(self, text):
+        """One value is typed into the current cell; several fill the New column downwards from the cursor."""
+        values = [part.strip() for part in re.split(r"[\r\n\t;]+", text) if part.strip()]
+        if not values:
+            return
+        if self.col > 0:
+            self.note = "Paste into the New column"
+            return
+        if len(values) == 1 and self.editable():
+            self.editing = (self.editing or "") + values[0]
+            return
+        self.commit()
+        start = max(self.row, self.rows.index(self.keys[0]))
+        targets = self.rows[start:start + len(values)]
+        self.cells.update(zip(targets, values))
+        self.row = self.rows.index(targets[-1])
+        self.note = f"Pasted {len(targets)} values, {self.labels[targets[0]]} to {self.labels[targets[-1]]}"
+        left_out = len(values) - len(targets)
+        if left_out:
+            self.note += f". {left_out} more did not fit and were left out."
+
     def copy_column(self):
         column = self.columns[self.col - 1]
         self.cells.update({key: fmt(column.values[key]) for key in self.keys})
@@ -259,6 +283,7 @@ def build_app(sheet):
     kb.add("delete")(lambda event: sheet.delete())
     kb.add("c-r")(lambda event: sheet.rescale())
     kb.add("c-c")(lambda event: event.app.exit(result=None))
+    kb.add(Keys.BracketedPaste)(lambda event: sheet.paste(event.data))
 
     @kb.add("enter")
     def enter(event):

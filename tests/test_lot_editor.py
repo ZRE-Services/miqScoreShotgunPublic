@@ -150,3 +150,46 @@ def test_app_links_from_a_sets_lot_row_and_keeps_state_for_the_next_run(store):
     assert run_keys(sheet, "13\r", up, up, right, right, "\r") == (lot_editor.LINK, 1)
     assert sheet.cells[KEYS[0]] == "13"
     assert run_keys(sheet, "\x03") is None  # Ctrl-C
+
+
+CERTIFICATE = "9.29\n14.4\n12.36\n11.65\n11.01\n12.84\n12.84\n12.27\n1.61\n1.73\n"
+CERTIFICATE_VALUES = [9.29, 14.4, 12.36, 11.65, 11.01, 12.84, 12.84, 12.27, 1.61, 1.73]
+
+
+@pytest.mark.parametrize("text", [CERTIFICATE, CERTIFICATE.replace("\n", "\r\n"), "\t".join(CERTIFICATE.split()) + "\n"])
+def test_paste_column_fills_all_values(sheet, text):
+    sheet.paste(text)
+    assert sheet.save() == dict(zip(KEYS, CERTIFICATE_VALUES))
+    assert sheet.current == KEYS[-1]
+
+
+def test_paste_starts_at_cursor_and_leaves_out_what_does_not_fit(sheet):
+    sheet.move(rows=8)
+    sheet.paste("1.5\n1.6\n1.7")
+    assert [sheet.cells[k] for k in KEYS[-2:]] == ["1.5", "1.6"]
+    assert sheet.cells[KEYS[0]] == "12"
+    assert "1 more did not fit" in sheet.note
+
+
+def test_paste_on_lot_row_starts_at_first_organism(sheet):
+    sheet.move(rows=-1)
+    sheet.paste("5\n6")
+    assert [sheet.cells[k] for k in KEYS[:2]] == ["5", "6"]
+
+
+def test_paste_single_value_is_typed(sheet):
+    sheet.type("1")
+    sheet.paste("2.5\n")
+    assert sheet.editing == "12.5"
+
+
+def test_paste_on_other_column_changes_nothing(sheet):
+    sheet.move(cols=1)
+    sheet.paste(CERTIFICATE)
+    assert sheet.cells[KEYS[0]] == "12"
+
+
+def test_app_accepts_bracketed_paste(store):
+    sheet = lot_editor.new_sheet(store, "standard", "999")
+    action, values = run_keys(sheet, "\x1b[200~" + CERTIFICATE + "\x1b[201~", "\x13")
+    assert (action, values) == (lot_editor.SAVE, dict(zip(KEYS, CERTIFICATE_VALUES)))

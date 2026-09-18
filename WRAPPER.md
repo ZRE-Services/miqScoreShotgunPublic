@@ -221,6 +221,10 @@ the table:
 - Move with the arrow keys (Tab/Shift-Tab also move down/up). You can go back to any cell at any time.
 - In the New column, start typing to overwrite a cell, or press **Enter** to edit the current value.
   **Enter** confirms and moves down, **Esc** drops the edit, **Del** clears the cell.
+- **Paste** several values at once, for example the column copied from the certificate (one value per
+  line) or a row copied from Excel (tab-separated). They fill the New column downwards from the cursor,
+  starting at P. aeruginosa if the cursor is on the Lot number row. Values that don't fit are left out,
+  with a message. A single pasted value goes into the current cell like typing.
 - On another set's column, **Enter** on a value copies it into New, and **Shift-C** copies the whole
   column. This helps when a new lot differs from a saved one in only a few values.
 - If a saved set already has your lot's values, go to that set's **Lot number** row and press **Enter** to
