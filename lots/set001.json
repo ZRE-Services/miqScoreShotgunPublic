@@ -1,0 +1,33 @@
+{
+  "index": 1,
+  "lot_numbers": [
+    "261689",
+    "238717",
+    "252193"
+  ],
+  "product": "standard",
+  "expectedValues": {
+    "Genomic": {
+      "paeruginosa": 10.47,
+      "ecoli": 12.69,
+      "senterica": 11.72,
+      "lfermentum": 12.56,
+      "efaecalis": 13.81,
+      "saureus": 11.34,
+      "lmonocytogenes": 12.1,
+      "bsubtilis": 11.86,
+      "scerevisiae": 1.55,
+      "cneoformans": 1.9
+    },
+    "GenomicBacteriaOnly": {
+      "paeruginosa": 10.84,
+      "ecoli": 13.14,
+      "senterica": 12.14,
+      "lfermentum": 13.01,
+      "efaecalis": 14.3,
+      "saureus": 11.75,
+      "lmonocytogenes": 12.53,
+      "bsubtilis": 12.28
+    }
+  }
+}
